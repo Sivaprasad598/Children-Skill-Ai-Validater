@@ -25,49 +25,53 @@ export async function generateAnalysis(params: {
   inputType: InputType;
   referenceType: ReferenceType;
   language: string;
-  answerContent: string; // Should be full Data URL or raw text
-  referenceContent?: string; // Should be full Data URL or raw text
+  answerContent: string;
+  referenceContent?: string;
 }): Promise<ValidationReport> {
   const { inputType, referenceType, language, answerContent, referenceContent } = params;
 
   const systemInstruction = `
-    You are an elite Academic Auditor. Your task is to provide a standardized validation of a student's answer against a "Source of Truth".
+    You are a Strict Academic Validator. Your goal is to determine how closely a student's submission matches the provided "Source of Truth".
 
-    STRICT HIERARCHICAL SCORING PROTOCOL (Total Score 0-100):
+    VALIDATION HIERARCHY (Follow strictly to ensure score consistency):
     
-    STEP 1: FACTUAL CORRECTNESS (70% weight) - THE MOST IMPORTANT
-    - Compare the student's core claims against the Source of Truth.
-    - If the student is factually wrong on the main point, the OVERALL score must be low (e.g., if the answer is completely wrong, score < 20).
-    - If the student is factually correct, start with 70 points.
-    
-    STEP 2: COMPLETENESS (20% weight)
-    - Check if all required components from the Source of Truth are present.
-    - If core facts are correct but 50% of the detail is missing, deduct 10 points from this section.
-    
-    STEP 3: LINGUISTIC QUALITY (10% weight)
-    - Assess spelling and grammar. 
-    - This is the LEAST important. A factually perfect answer with poor grammar should still score at least 90/100.
+    1. SEMANTIC & FACTUAL MATCH (80% weight):
+       - Compare the student's submission against the Source of Truth literal content.
+       - Does the student use the correct keywords? Does the logic follow the source exactly?
+       - CRITICAL: If a spelling mistake changes the meaning of a word (e.g., "affect" vs "effect", or "complement" vs "compliment"), or if a typo makes a key term unrecognizable/wrong, it MUST be penalized as a FACTUAL error, not just a spelling error.
+       - If the core answer is missing or contradicts the source, the score should drop below 40 immediately.
 
-    CONSISTENCY RULE: Be ruthless about facts. A beautifully written lie is a 0% accurate answer.
+    2. LINGUISTIC PRECISION (20% weight):
+       - Spelling, grammar, and sentence structure.
+       - If the student has perfect facts but messy spelling (that doesn't change meaning), deduct from this 20% portion.
+       - If spelling errors compromise the professional quality or clarity, reflect that here.
 
-    OUTPUT SPECIFICATIONS:
-    - All feedback and analysis MUST be in ${language}.
-    - 'extractedText': The text you read from the student's submission.
-    - 'referenceText': A summary of the correct answer from the source.
-    - 'subjectMistakes': List only factual or conceptual errors.
+    SCORING STANDARDS:
+    - Same inputs must result in the same scores. Be objective.
+    - Start at 100. Deduct points for:
+        a) Missing facts (High penalty)
+        b) Wrong facts (Severe penalty)
+        c) Semantic-altering typos (Medium-High penalty)
+        d) Minor typos/grammar (Low penalty)
+
+    OUTPUT REQUIREMENTS:
+    - All text in the report must be in ${language}.
+    - 'extractedText': Literal transcription of student work.
+    - 'referenceText': Summary of what was expected from the source.
+    - 'subjectMistakes': List only the core content/factual gaps.
   `;
 
   const parts: any[] = [];
 
   // Handle Reference Source
   if (referenceType === ReferenceType.AI_TUTOR) {
-    parts.push({ text: "SOURCE OF TRUTH: Your internal expert knowledge." });
+    parts.push({ text: "SOURCE OF TRUTH: Use your internal academic expert knowledge. Provide a high standard." });
   } else if (referenceContent) {
     const { mimeType, data } = parseDataUrl(referenceContent);
     if (mimeType === 'text/plain') {
-      parts.push({ text: `SOURCE OF TRUTH (Text): ${data}` });
+      parts.push({ text: `SOURCE OF TRUTH (Reference Text): ${data}` });
     } else {
-      parts.push({ text: `SOURCE OF TRUTH (${mimeType}):` });
+      parts.push({ text: `SOURCE OF TRUTH (${mimeType} Document):` });
       parts.push({ inlineData: { mimeType, data } });
     }
   }
@@ -77,11 +81,11 @@ export async function generateAnalysis(params: {
   if (student.mimeType === 'text/plain') {
     parts.push({ text: `STUDENT SUBMISSION (Text): ${student.data}` });
   } else {
-    parts.push({ text: `STUDENT SUBMISSION (${student.mimeType}):` });
+    parts.push({ text: `STUDENT SUBMISSION (${student.mimeType} Image/Doc):` });
     parts.push({ inlineData: { mimeType: student.mimeType, data: student.data } });
   }
 
-  parts.push({ text: "Perform a deep cross-reference validation and return the standardized JSON report." });
+  parts.push({ text: "Now, perform the strict validation. Cross-check if any typos change the factual meaning. Ensure the overallAccuracy score is consistent and follows the 80/20 rule. Return the result in JSON." });
 
   try {
     const response = await ai.models.generateContent({
@@ -89,14 +93,14 @@ export async function generateAnalysis(params: {
       contents: { parts },
       config: {
         systemInstruction,
-        temperature: 0, 
+        temperature: 0, // Critical for consistent scoring across same inputs
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            overallAccuracy: { type: Type.NUMBER, description: "Factual Correctness (70) + Completeness (20) + Grammar (10)." },
+            overallAccuracy: { type: Type.NUMBER, description: "Scale 0-100. 80% factual/keyword match, 20% linguistic quality." },
             grammarScore: { type: Type.NUMBER, description: "Scale 0-10." },
-            calligraphyScore: { type: Type.NUMBER, description: "Scale 0-10 if handwriting is visible, else 10." },
+            calligraphyScore: { type: Type.NUMBER, description: "Scale 0-10. Handwriting legibility if applicable." },
             spellingMistakes: {
               type: Type.ARRAY,
               items: {
@@ -120,10 +124,10 @@ export async function generateAnalysis(params: {
                 required: ["incorrect", "correct"]
               }
             },
-            subjectMistakes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific factual errors found." },
-            insights: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Academic improvement tips." },
-            extractedText: { type: Type.STRING, description: "Transcription of student submission." },
-            referenceText: { type: Type.STRING, description: "Summary of source truth." }
+            subjectMistakes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific factual or keyword discrepancies from the source." },
+            insights: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Expert feedback for the student." },
+            extractedText: { type: Type.STRING },
+            referenceText: { type: Type.STRING }
           },
           required: ["overallAccuracy", "grammarScore", "spellingMistakes", "grammarMistakes", "subjectMistakes", "insights", "extractedText"]
         }
@@ -136,7 +140,7 @@ export async function generateAnalysis(params: {
       ...reportData,
       overallAccuracy: Math.round(reportData.overallAccuracy || 0),
       grammarScore: Math.round(reportData.grammarScore || 0),
-      calligraphyScore: reportData.calligraphyScore ? Math.round(reportData.calligraphyScore) : undefined,
+      calligraphyScore: reportData.calligraphyScore !== undefined ? Math.round(reportData.calligraphyScore) : undefined,
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       inputType,
@@ -146,7 +150,7 @@ export async function generateAnalysis(params: {
       rawReferenceData: referenceContent
     };
   } catch (error: any) {
-    console.error("Gemini API Full Error:", error);
+    console.error("Gemini Validation Error:", error);
     throw error;
   }
 }
