@@ -2,6 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { ValidationReport, InputType, ReferenceType } from '../types';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+import { PdfPagePreview } from '../App';
 
 interface ReportProps {
   report: ValidationReport;
@@ -10,6 +11,8 @@ interface ReportProps {
 
 const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
   const [modalContent, setModalContent] = useState<{ title: string; data: string; type: 'IMAGE' | 'TEXT' | 'PDF' } | null>(null);
+  const [modalPdfPage, setModalPdfPage] = useState(1);
+  const [modalPdfTotal, setModalPdfTotal] = useState(1);
 
   const chartData = [
     { name: 'Correct', value: report.overallAccuracy },
@@ -40,7 +43,6 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
     const sortedMistakes = [...new Set(mistakes)].sort((a, b) => b.length - a.length);
     
     // Create a regex that matches any of the mistakes
-    // Using escape for special characters
     const escapedMistakes = sortedMistakes.map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     const regex = new RegExp(`(${escapedMistakes.join('|')})`, 'gi');
 
@@ -72,6 +74,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
     else if (type === ReferenceType.IMAGE || type === InputType.IMAGE) viewType = 'IMAGE';
     else if (type === ReferenceType.PDF || type === InputType.PDF) viewType = 'PDF';
 
+    setModalPdfPage(1);
     setModalContent({
       title,
       data,
@@ -291,29 +294,46 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
       {modalContent && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-3 md:p-6 bg-slate-900/90 backdrop-blur-md">
           <div className="bg-white rounded-[1.5rem] md:rounded-[3rem] shadow-2xl max-w-5xl w-full max-h-[95vh] flex flex-col overflow-hidden animate-in zoom-in-95">
-            <div className="p-5 md:p-8 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-lg md:text-2xl font-black text-slate-800 truncate pr-4">{modalContent.title}</h3>
-              <button onClick={() => setModalContent(null)} className="flex-shrink-0 w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-500 transition-all hover:bg-slate-200">
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
+            <div className="p-5 md:p-8 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
+              <div className="flex flex-col min-w-0">
+                <h3 className="text-lg md:text-2xl font-black text-slate-800 truncate pr-4">{modalContent.title}</h3>
+                {modalContent.type === 'PDF' && (
+                   <span className="text-xs font-black text-emerald-600 mt-0.5">Page {modalPdfPage} / {modalPdfTotal}</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {modalContent.type === 'PDF' && (
+                  <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-100 mr-2">
+                     <button onClick={() => setModalPdfPage(p => Math.max(1, p - 1))} className="p-2 text-slate-500 hover:text-emerald-600 disabled:opacity-30" disabled={modalPdfPage <= 1}>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15 19l-7-7 7-7" /></svg>
+                     </button>
+                     <button onClick={() => setModalPdfPage(p => Math.min(modalPdfTotal, p + 1))} className="p-2 text-slate-500 hover:text-emerald-600 disabled:opacity-30" disabled={modalPdfPage >= modalPdfTotal}>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M9 5l7 7-7 7" /></svg>
+                     </button>
+                  </div>
+                )}
+                <button onClick={() => setModalContent(null)} className="flex-shrink-0 w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-500 transition-all hover:bg-slate-200 hover:text-red-500">
+                  <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
             </div>
-            <div className="flex-1 overflow-auto p-4 md:p-10 bg-slate-50">
+            <div className="flex-1 overflow-auto p-4 md:p-10 bg-slate-50 flex items-center justify-center">
               {modalContent.type === 'IMAGE' ? (
-                <div className="flex justify-center">
-                  <img src={modalContent.data} alt="View" className="max-w-full h-auto rounded-xl shadow-xl border-2 border-white bg-white" />
+                <div className="w-full flex justify-center">
+                  <img src={modalContent.data} alt="View" className="max-w-full h-auto rounded-xl shadow-xl border-4 border-white bg-white" />
                 </div>
               ) : modalContent.type === 'PDF' ? (
-                <div className="w-full h-[60vh] md:h-[70vh] border border-slate-200 rounded-xl overflow-hidden shadow-lg bg-white">
-                  <iframe src={modalContent.data} className="w-full h-full" title="PDF Viewer" />
+                <div className="w-full h-[60vh] md:h-[75vh] max-w-3xl rounded-xl overflow-hidden shadow-2xl bg-white border-2 border-slate-200">
+                   <PdfPagePreview dataUrl={modalContent.data} pageNumber={modalPdfPage} onDocumentLoad={setModalPdfTotal} />
                 </div>
               ) : (
-                <div className="bg-white p-6 md:p-10 rounded-2xl border border-slate-100 text-slate-700 font-mono text-sm md:text-base whitespace-pre-wrap leading-relaxed shadow-sm">
+                <div className="w-full bg-white p-6 md:p-10 rounded-2xl border border-slate-100 text-slate-700 font-mono text-sm md:text-base whitespace-pre-wrap leading-relaxed shadow-sm max-w-4xl">
                   {modalContent.data}
                 </div>
               )}
             </div>
-            <div className="p-6 md:p-8 border-t border-slate-100 flex justify-center">
-               <button onClick={() => setModalContent(null)} className="w-full sm:w-auto px-12 py-3 bg-slate-900 text-white rounded-xl font-black text-sm active:scale-95 transition-all">Close Viewer</button>
+            <div className="p-6 md:p-8 border-t border-slate-100 flex justify-center bg-white">
+               <button onClick={() => setModalContent(null)} className="w-full sm:w-auto px-12 py-3.5 bg-slate-900 text-white rounded-xl font-black text-sm active:scale-95 transition-all shadow-lg">Close Preview</button>
             </div>
           </div>
         </div>

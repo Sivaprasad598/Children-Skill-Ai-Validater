@@ -14,7 +14,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.mjs`;
 
 // Specialized PDF renderer component
-const PdfPagePreview: React.FC<{ dataUrl: string; pageNumber: number; onDocumentLoad?: (numPages: number) => void }> = ({ dataUrl, pageNumber, onDocumentLoad }) => {
+export const PdfPagePreview: React.FC<{ dataUrl: string; pageNumber: number; onDocumentLoad?: (numPages: number) => void }> = ({ dataUrl, pageNumber, onDocumentLoad }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [loading, setLoading] = useState(true);
 
@@ -244,7 +244,12 @@ const App: React.FC = () => {
                     ].map(btn => (
                       <button
                         key={btn.id}
-                        onClick={() => { setReferenceType(btn.id); if(btn.id === ReferenceType.AI_TUTOR) setReferenceValue(''); setUploadedRefName(''); }}
+                        onClick={() => { 
+                          setReferenceType(btn.id); 
+                          setReferenceValue(''); 
+                          setUploadedRefName(''); 
+                          setRefPdfPage(1);
+                        }}
                         className={`px-4 md:px-6 py-2.5 rounded-xl md:rounded-2xl text-[10px] md:text-xs font-black uppercase tracking-wider transition-all border-2 ${referenceType === btn.id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-400 border-slate-100'}`}
                       >
                         {btn.label}
@@ -370,7 +375,12 @@ const App: React.FC = () => {
                     ].map(btn => (
                       <button
                         key={btn.id}
-                        onClick={() => { setInputType(btn.id); setInputValue(''); setUploadedAnswerName(''); }}
+                        onClick={() => { 
+                          setInputType(btn.id); 
+                          setInputValue(''); 
+                          setUploadedAnswerName(''); 
+                          setSubPdfPage(1);
+                        }}
                         className={`px-4 md:px-6 py-2.5 rounded-xl md:rounded-2xl text-[10px] md:text-xs font-black uppercase tracking-wider transition-all border-2 ${inputType === btn.id ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-slate-400 border-slate-100'}`}
                       >
                         {btn.label}
