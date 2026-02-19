@@ -87,7 +87,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex flex-col">
           <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Validation Report</h2>
-          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-1">Linguix Semantic Analysis v2.5</p>
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-1">BrainGauge Semantic Analysis v2.5</p>
         </div>
         <button onClick={onClose} className="w-full sm:w-auto px-8 py-3 bg-slate-100 hover:bg-slate-200 rounded-full font-black text-slate-600 transition-all text-sm">
           Dismiss Report
@@ -273,7 +273,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
         <div className="bg-slate-900 p-8 md:p-12 rounded-[2rem] md:rounded-[3.5rem] shadow-2xl text-white relative flex flex-col">
           <h3 className="text-xl md:text-2xl font-black mb-6 flex items-center gap-3">
             <span className="w-8 h-8 md:w-10 md:h-10 bg-emerald-500 text-white rounded-xl flex items-center justify-center">★</span>
-            Linguix AI Tutor Insights
+            BrainGauge AI Tutor Insights
           </h3>
           <div className="space-y-4 md:space-y-6 flex-1">
             {report.insights.map((insight, idx) => (

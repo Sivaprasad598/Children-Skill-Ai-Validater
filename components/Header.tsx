@@ -16,9 +16,9 @@ const Header: React.FC<HeaderProps> = ({ user, activeTab, setActiveTab, onLogout
       <header className="sticky top-0 z-50 glass-morphism border-b border-emerald-100/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 md:px-6 h-16 md:h-20 flex items-center justify-between">
           <div className="flex items-center gap-2 md:gap-3 cursor-pointer group" onClick={() => setActiveTab('validate')}>
-            <div className="w-8 h-8 md:w-10 md:h-10 bg-gradient-to-br from-emerald-600 to-teal-500 rounded-lg md:rounded-xl flex items-center justify-center text-white font-black text-lg md:text-xl shadow-lg shadow-emerald-100 transition-transform">L</div>
+            <div className="w-8 h-8 md:w-10 md:h-10 bg-gradient-to-br from-emerald-600 to-teal-500 rounded-lg md:rounded-xl flex items-center justify-center text-white font-black text-lg md:text-xl shadow-lg shadow-emerald-100 transition-transform">B</div>
             <span className="text-xl md:text-2xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 to-cyan-600">
-              Linguix
+              BrainGauge
             </span>
           </div>
 

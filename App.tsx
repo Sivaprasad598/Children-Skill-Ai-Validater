@@ -221,7 +221,7 @@ const App: React.FC = () => {
           <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
             <div className="text-center space-y-2">
               <h1 className="text-3xl md:text-5xl font-black text-slate-900 tracking-tighter">AI Verification Hub</h1>
-              <p className="text-slate-500 max-w-xl mx-auto text-sm md:text-lg font-medium">Validation powered by Gemini Academic Core.</p>
+              <p className="text-slate-500 max-w-xl mx-auto text-sm md:text-lg font-medium">Validation powered by BrainGauge Academic Core.</p>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-10">

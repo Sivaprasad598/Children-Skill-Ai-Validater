@@ -1,8 +1,8 @@
 
 import { User, ValidationHistoryItem } from '../types';
 
-const USER_KEY = 'linguix_user';
-const HISTORY_KEY = 'linguix_history';
+const USER_KEY = 'braingauge_user';
+const HISTORY_KEY = 'braingauge_history';
 
 export const storageService = {
   getUser: (): User | null => {

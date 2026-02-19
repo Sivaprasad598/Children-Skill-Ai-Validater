@@ -12,7 +12,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     const guestUser: User = {
       id: `guest_${crypto.randomUUID().slice(0, 8)}`,
       name: 'Guest Explorer',
-      email: 'guest@linguix.ai',
+      email: 'guest@braingauge.ai',
       profilePicture: `https://picsum.photos/seed/${Math.random()}/200`,
       loginType: 'guest',
       preferredLanguage: 'English',
@@ -40,7 +40,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-600 via-teal-500 to-cyan-500 p-4">
       <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center space-y-8 animate-in fade-in zoom-in duration-700">
         <div>
-          <h1 className="text-5xl font-black text-slate-800 mb-2 tracking-tight">Linguix</h1>
+          <h1 className="text-5xl font-black text-slate-800 mb-2 tracking-tight">BrainGauge</h1>
           <p className="text-teal-600 font-bold uppercase tracking-widest text-xs">Academic AI Validator</p>
         </div>
 
@@ -68,7 +68,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
         </div>
 
         <p className="text-[10px] text-slate-400 font-medium">
-          Secure, private, and powered by Gemini. By continuing, you agree to Linguix's Terms & Privacy policy.
+          Secure, private, and powered by Gemini. By continuing, you agree to BrainGauge's Terms & Privacy policy.
         </p>
       </div>
     </div>
