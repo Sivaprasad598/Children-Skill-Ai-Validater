@@ -65,7 +65,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: `Please read this clearly: ${text}` }] }],
+        contents: [{ parts: [{ text: text }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
@@ -275,49 +275,57 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
         </div>
       </div>
 
-      {/* NEW: Contradictory Statements Block with TTS */}
+      {/* NEW: Contradictory Statements Block with Merged TTS Analysis */}
       {report.incorrectStatements && report.incorrectStatements.length > 0 && (
         <div className="bg-red-50 border-2 border-red-100 p-8 md:p-12 rounded-[2rem] md:rounded-[3.5rem] shadow-xl animate-in zoom-in duration-500">
-           <h3 className="text-xl md:text-2xl font-black text-red-900 mb-6 flex items-center gap-3">
-             <div className="w-10 h-10 bg-red-600 text-white rounded-xl flex items-center justify-center text-xl">✕</div>
-             Contradictory Logic Detected
-           </h3>
+           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+             <h3 className="text-xl md:text-2xl font-black text-red-900 flex items-center gap-3">
+               <div className="w-10 h-10 bg-red-600 text-white rounded-xl flex items-center justify-center text-xl">✕</div>
+               Contradictory Logic Detected
+             </h3>
+             <span className="text-[10px] font-black text-red-400 uppercase tracking-widest bg-white px-4 py-1.5 rounded-full border border-red-100 shadow-sm">AI Verification Critical</span>
+           </div>
+           
            <div className="space-y-6">
-              {report.incorrectStatements.map((item, idx) => (
-                <div key={idx} className="bg-white p-6 rounded-3xl border border-red-200 shadow-sm space-y-3">
-                   <div className="flex flex-col gap-1">
-                      <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">Wrong Statement</span>
-                      <p className="text-slate-800 font-bold italic leading-relaxed">"{item.statement}"</p>
-                   </div>
-                   <div className="h-px bg-slate-100"></div>
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="flex flex-col gap-2">
+              {report.incorrectStatements.map((item, idx) => {
+                const mergedAnalysisText = `Wrong Statement is ${item.statement} & correction is ${item.correction} & the reason is ${item.reason}`;
+                const speechId = `merged-${idx}`;
+                
+                return (
+                  <div key={idx} className="bg-white p-6 md:p-8 rounded-[2rem] border border-red-200 shadow-sm space-y-5 group relative hover:shadow-md transition-all">
+                     <div className="flex flex-col gap-2">
                         <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Correction</span>
+                          <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">Wrong Statement</span>
                           <button 
-                            onClick={() => handleSpeech(item.correction, `corr-${idx}`)}
-                            className={`p-1.5 rounded-lg transition-all ${isSpeaking === `corr-${idx}` ? 'bg-emerald-100 text-emerald-600 scale-110' : 'text-emerald-400 hover:bg-emerald-50 hover:text-emerald-600'}`}
+                            onClick={() => handleSpeech(mergedAnalysisText, speechId)}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all shadow-sm border ${isSpeaking === speechId ? 'bg-red-600 text-white border-red-600 scale-105' : 'bg-red-50 text-red-600 border-red-100 hover:bg-red-600 hover:text-white hover:border-red-600'}`}
                           >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
+                             <svg className={`w-4 h-4 ${isSpeaking === speechId ? 'animate-pulse' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                             </svg>
+                             <span className="text-[10px] font-black uppercase tracking-widest">
+                               {isSpeaking === speechId ? 'Reading Analysis...' : 'Play Full Explanation'}
+                             </span>
                           </button>
                         </div>
-                        <p className="text-slate-700 font-medium text-sm leading-relaxed">{item.correction}</p>
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Reason</span>
-                          <button 
-                            onClick={() => handleSpeech(item.reason, `reason-${idx}`)}
-                            className={`p-1.5 rounded-lg transition-all ${isSpeaking === `reason-${idx}` ? 'bg-slate-100 text-slate-600 scale-110' : 'text-slate-300 hover:bg-slate-50 hover:text-slate-600'}`}
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
-                          </button>
+                        <p className="text-slate-800 font-bold italic leading-relaxed text-sm md:text-base">"{item.statement}"</p>
+                     </div>
+                     
+                     <div className="h-px bg-slate-100"></div>
+                     
+                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="flex flex-col gap-2 p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100/50">
+                           <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Academic Correction</span>
+                           <p className="text-slate-700 font-bold text-sm leading-relaxed">{item.correction}</p>
                         </div>
-                        <p className="text-slate-500 text-xs italic leading-relaxed">{item.reason}</p>
-                      </div>
-                   </div>
-                </div>
-              ))}
+                        <div className="flex flex-col gap-2 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Logic Reason</span>
+                           <p className="text-slate-500 text-xs italic leading-relaxed font-medium">{item.reason}</p>
+                        </div>
+                     </div>
+                  </div>
+                );
+              })}
            </div>
         </div>
       )}
