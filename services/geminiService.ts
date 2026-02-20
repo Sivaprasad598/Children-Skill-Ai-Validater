@@ -38,27 +38,20 @@ export async function generateAnalysis(params: {
     1. SEMANTIC & FACTUAL MATCH (80% weight):
        - Compare the student's submission against the Source of Truth literal content.
        - Does the student use the correct keywords? Does the logic follow the source exactly?
-       - CRITICAL: If a spelling mistake changes the meaning of a word (e.g., "affect" vs "effect", or "complement" vs "compliment"), or if a typo makes a key term unrecognizable/wrong, it MUST be penalized as a FACTUAL error, not just a spelling error.
-       - If the core answer is missing or contradicts the source, the score should drop below 40 immediately.
+       - CRITICAL: Identify "Logical Reversals" where the student uses an antonym or incorrect verb that flips the meaning (e.g., "damage" instead of "protect").
+       - If a spelling mistake changes the meaning of a word, or if a typo makes a key term unrecognizable/wrong, it MUST be penalized as a FACTUAL error.
 
     2. LINGUISTIC PRECISION (20% weight):
        - Spelling, grammar, and sentence structure.
-       - If the student has perfect facts but messy spelling (that doesn't change meaning), deduct from this 20% portion.
-       - If spelling errors compromise the professional quality or clarity, reflect that here.
+       - If facts are perfect but spelling is messy, deduct from this 20% portion.
 
-    SCORING STANDARDS:
-    - Same inputs must result in the same scores. Be objective.
-    - Start at 100. Deduct points for:
-        a) Missing facts (High penalty)
-        b) Wrong facts (Severe penalty)
-        c) Semantic-altering typos (Medium-High penalty)
-        d) Minor typos/grammar (Low penalty)
+    SPECIFIC TASK: Identify "Incorrect Statements". These are full sentences or phrases where the logic is flawed or the information contradicts the source (e.g., "Action is essential to damage the planet").
 
     OUTPUT REQUIREMENTS:
     - All text in the report must be in ${language}.
     - 'extractedText': Literal transcription of student work.
-    - 'referenceText': Summary of what was expected from the source.
-    - 'subjectMistakes': List only the core content/factual gaps.
+    - 'incorrectStatements': List phrases that are logically or factually wrong.
+    - 'subjectMistakes': List general content/factual gaps.
   `;
 
   const parts: any[] = [];
@@ -85,7 +78,7 @@ export async function generateAnalysis(params: {
     parts.push({ inlineData: { mimeType: student.mimeType, data: student.data } });
   }
 
-  parts.push({ text: "Now, perform the strict validation. Cross-check if any typos change the factual meaning. Ensure the overallAccuracy score is consistent and follows the 80/20 rule. Return the result in JSON." });
+  parts.push({ text: "Perform the validation. Specifically look for sentences with inverted logic or factual errors. Return result in JSON." });
 
   try {
     const response = await ai.models.generateContent({
@@ -93,14 +86,14 @@ export async function generateAnalysis(params: {
       contents: { parts },
       config: {
         systemInstruction,
-        temperature: 0, // Critical for consistent scoring across same inputs
+        temperature: 0,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            overallAccuracy: { type: Type.NUMBER, description: "Scale 0-100. 80% factual/keyword match, 20% linguistic quality." },
-            grammarScore: { type: Type.NUMBER, description: "Scale 0-10." },
-            calligraphyScore: { type: Type.NUMBER, description: "Scale 0-10. Handwriting legibility if applicable." },
+            overallAccuracy: { type: Type.NUMBER },
+            grammarScore: { type: Type.NUMBER },
+            calligraphyScore: { type: Type.NUMBER },
             spellingMistakes: {
               type: Type.ARRAY,
               items: {
@@ -124,12 +117,24 @@ export async function generateAnalysis(params: {
                 required: ["incorrect", "correct"]
               }
             },
-            subjectMistakes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific factual or keyword discrepancies from the source." },
-            insights: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Expert feedback for the student." },
+            incorrectStatements: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  statement: { type: Type.STRING, description: "The incorrect sentence from the student's text." },
+                  correction: { type: Type.STRING, description: "How the sentence should have been phrased." },
+                  reason: { type: Type.STRING, description: "Why this logic is incorrect based on the source." }
+                },
+                required: ["statement", "correction", "reason"]
+              }
+            },
+            subjectMistakes: { type: Type.ARRAY, items: { type: Type.STRING } },
+            insights: { type: Type.ARRAY, items: { type: Type.STRING } },
             extractedText: { type: Type.STRING },
             referenceText: { type: Type.STRING }
           },
-          required: ["overallAccuracy", "grammarScore", "spellingMistakes", "grammarMistakes", "subjectMistakes", "insights", "extractedText"]
+          required: ["overallAccuracy", "grammarScore", "spellingMistakes", "grammarMistakes", "subjectMistakes", "incorrectStatements", "insights", "extractedText"]
         }
       }
     });

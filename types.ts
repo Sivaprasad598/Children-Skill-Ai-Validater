@@ -29,6 +29,12 @@ export interface Mistake {
   explanation?: string;
 }
 
+export interface IncorrectStatement {
+  statement: string;
+  correction: string;
+  reason: string;
+}
+
 export interface ValidationReport {
   id: string;
   timestamp: string;
@@ -41,6 +47,7 @@ export interface ValidationReport {
   spellingMistakes: Mistake[];
   grammarMistakes: Mistake[];
   subjectMistakes: string[];
+  incorrectStatements: IncorrectStatement[];
   insights: string[];
   extractedText: string;
   referenceText?: string;

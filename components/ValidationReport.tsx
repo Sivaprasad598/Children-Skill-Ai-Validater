@@ -1,8 +1,9 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { ValidationReport, InputType, ReferenceType } from '../types';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { PdfPagePreview } from '../App';
+import { GoogleGenAI, Modality } from "@google/genai";
 
 interface ReportProps {
   report: ValidationReport;
@@ -13,6 +14,8 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
   const [modalContent, setModalContent] = useState<{ title: string; data: string; type: 'IMAGE' | 'TEXT' | 'PDF' } | null>(null);
   const [modalPdfPage, setModalPdfPage] = useState(1);
   const [modalPdfTotal, setModalPdfTotal] = useState(1);
+  const [isSpeaking, setIsSpeaking] = useState<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const chartData = [
     { name: 'Correct', value: report.overallAccuracy },
@@ -24,25 +27,92 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
   const displayGrammar = Math.min(10, report.grammarScore);
   const displayCalligraphy = report.calligraphyScore !== undefined ? Math.min(10, report.calligraphyScore) : undefined;
 
+  // Audio utility functions
+  function decodeBase64(base64: string) {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  async function decodeAudioData(
+    data: Uint8Array,
+    ctx: AudioContext,
+    sampleRate: number,
+    numChannels: number,
+  ): Promise<AudioBuffer> {
+    const dataInt16 = new Int16Array(data.buffer);
+    const frameCount = dataInt16.length / numChannels;
+    const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+    for (let channel = 0; channel < numChannels; channel++) {
+      const channelData = buffer.getChannelData(channel);
+      for (let i = 0; i < frameCount; i++) {
+        channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+      }
+    }
+    return buffer;
+  }
+
+  const handleSpeech = async (text: string, id: string) => {
+    if (isSpeaking) return;
+    setIsSpeaking(id);
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: `Please read this clearly: ${text}` }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' },
+            },
+          },
+        },
+      });
+
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        }
+        const ctx = audioContextRef.current;
+        const audioBuffer = await decodeAudioData(decodeBase64(base64Audio), ctx, 24000, 1);
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        source.onended = () => setIsSpeaking(null);
+        source.start();
+      } else {
+        setIsSpeaking(null);
+      }
+    } catch (error) {
+      console.error("TTS Error:", error);
+      setIsSpeaking(null);
+    }
+  };
+
   /**
-   * Renders the extracted text with spelling and grammar mistakes highlighted in red.
+   * Renders the extracted text with spelling, grammar mistakes, and incorrect statements highlighted in red.
    */
   const annotatedText = useMemo(() => {
     let text = report.extractedText;
     if (!text) return <span className="text-slate-400 italic">No text extracted.</span>;
 
-    // Collect all incorrect strings to highlight
     const mistakes = [
       ...report.spellingMistakes.map(m => m.incorrect),
-      ...report.grammarMistakes.map(m => m.incorrect)
+      ...report.grammarMistakes.map(m => m.incorrect),
+      ...(report.incorrectStatements || []).map(s => s.statement)
     ].filter(Boolean);
 
     if (mistakes.length === 0) return <span>{text}</span>;
 
-    // Sort by length descending to avoid partial matches inside longer matches
     const sortedMistakes = [...new Set(mistakes)].sort((a, b) => b.length - a.length);
-    
-    // Create a regex that matches any of the mistakes
     const escapedMistakes = sortedMistakes.map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     const regex = new RegExp(`(${escapedMistakes.join('|')})`, 'gi');
 
@@ -58,7 +128,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
         <span key={i}>{part}</span>
       );
     });
-  }, [report.extractedText, report.spellingMistakes, report.grammarMistakes]);
+  }, [report.extractedText, report.spellingMistakes, report.grammarMistakes, report.incorrectStatements]);
 
   const handleViewSource = (isReference: boolean) => {
     const data = isReference ? report.rawReferenceData : report.rawInputData;
@@ -204,6 +274,53 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
           </div>
         </div>
       </div>
+
+      {/* NEW: Contradictory Statements Block with TTS */}
+      {report.incorrectStatements && report.incorrectStatements.length > 0 && (
+        <div className="bg-red-50 border-2 border-red-100 p-8 md:p-12 rounded-[2rem] md:rounded-[3.5rem] shadow-xl animate-in zoom-in duration-500">
+           <h3 className="text-xl md:text-2xl font-black text-red-900 mb-6 flex items-center gap-3">
+             <div className="w-10 h-10 bg-red-600 text-white rounded-xl flex items-center justify-center text-xl">✕</div>
+             Contradictory Logic Detected
+           </h3>
+           <div className="space-y-6">
+              {report.incorrectStatements.map((item, idx) => (
+                <div key={idx} className="bg-white p-6 rounded-3xl border border-red-200 shadow-sm space-y-3">
+                   <div className="flex flex-col gap-1">
+                      <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">Wrong Statement</span>
+                      <p className="text-slate-800 font-bold italic leading-relaxed">"{item.statement}"</p>
+                   </div>
+                   <div className="h-px bg-slate-100"></div>
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Correction</span>
+                          <button 
+                            onClick={() => handleSpeech(item.correction, `corr-${idx}`)}
+                            className={`p-1.5 rounded-lg transition-all ${isSpeaking === `corr-${idx}` ? 'bg-emerald-100 text-emerald-600 scale-110' : 'text-emerald-400 hover:bg-emerald-50 hover:text-emerald-600'}`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
+                          </button>
+                        </div>
+                        <p className="text-slate-700 font-medium text-sm leading-relaxed">{item.correction}</p>
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Reason</span>
+                          <button 
+                            onClick={() => handleSpeech(item.reason, `reason-${idx}`)}
+                            className={`p-1.5 rounded-lg transition-all ${isSpeaking === `reason-${idx}` ? 'bg-slate-100 text-slate-600 scale-110' : 'text-slate-300 hover:bg-slate-50 hover:text-slate-600'}`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
+                          </button>
+                        </div>
+                        <p className="text-slate-500 text-xs italic leading-relaxed">{item.reason}</p>
+                      </div>
+                   </div>
+                </div>
+              ))}
+           </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
         {/* Detailed Error Log */}

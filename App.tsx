@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { User, InputType, ReferenceType, ValidationReport, ValidationHistoryItem } from './types';
 import { LANGUAGES } from './constants';
@@ -39,7 +38,8 @@ export const PdfPagePreview: React.FC<{ dataUrl: string; pageNumber: number; onD
             canvas.height = viewport.height;
             canvas.width = viewport.width;
 
-            const renderContext = {
+            // Fix: Cast renderContext to any to satisfy type definitions that might mismatch with library version
+            const renderContext: any = {
               canvasContext: context,
               viewport: viewport,
             };
