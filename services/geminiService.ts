@@ -25,64 +25,93 @@ export async function generateAnalysis(params: {
   inputType: InputType;
   referenceType: ReferenceType;
   language: string;
-  answerContent: string;
-  referenceContent?: string;
+  answerContent: string[];
+  referenceContent?: string[];
+  subject?: string;
 }): Promise<ValidationReport> {
-  const { inputType, referenceType, language, answerContent, referenceContent } = params;
+  const { inputType, referenceType, language, answerContent, referenceContent, subject } = params;
+
+  let subjectContext = "";
+  if (subject && subject !== 'None') {
+    subjectContext = `
+    STRICT SUBJECT VALIDATION:
+    The student is being tested on the subject: ${subject}.
+    You MUST strictly adhere to the facts related to ${subject} provided in the Source of Truth.
+    If multiple reference documents are provided, treat them as the collective source of truth.
+    Do not use external knowledge that contradicts or adds to the provided documents.
+    `;
+  }
 
   const systemInstruction = `
     You are a Strict Academic Validator. Your goal is to determine how closely a student's submission matches the provided "Source of Truth".
 
-    VALIDATION HIERARCHY (Follow strictly to ensure score consistency):
-    
-    1. SEMANTIC & FACTUAL MATCH (80% weight):
-       - Compare the student's submission against the Source of Truth literal content.
-       - Does the student use the correct keywords? Does the logic follow the source exactly?
-       - CRITICAL: Identify "Logical Reversals" where the student uses an antonym or incorrect verb that flips the meaning (e.g., "damage" instead of "protect").
-       - If a spelling mistake changes the meaning of a word, or if a typo makes a key term unrecognizable/wrong, it MUST be penalized as a FACTUAL error.
+    ${subjectContext}
 
-    2. LINGUISTIC PRECISION (20% weight):
-       - Spelling, grammar, and sentence structure.
-       - If facts are perfect but spelling is messy, deduct from this 20% portion.
+    STRICT SOURCE OF TRUTH ADHERENCE:
+    - If "Reference Material" (Source of Truth) is provided, it is your ONLY source of truth.
+    - If the student's text matches the Reference Material literally or semantically, it is 100% CORRECT.
+    - DO NOT flag a statement as "Incorrect" if it is present in the Reference Material.
+    - You MUST ignore your internal knowledge if it contradicts or adds information not present in the provided Source of Truth.
+    - If the student provides information that is NOT mentioned in the Reference Material, you MUST mark it as a "Subject Mistake" or "Incorrect Statement" (even if it is factually true in the real world).
 
-    SPECIFIC TASK: Identify "Incorrect Statements". These are full sentences or phrases where the logic is flawed or the information contradicts the source (e.g., "Action is essential to damage the planet").
+    STRICT SCORING PROTOCOL:
+    - 100% Accuracy: The student's answer perfectly matches the facts and logic in the Reference Material.
+    - Penalize ONLY for:
+        a) Factual contradictions to the Reference Material.
+        b) Omissions of critical facts from the Reference Material.
+        c) Logical reversals (e.g., saying "bad" when the source says "good").
+        d) Information not present in the Reference Material at all.
+
+    QUESTION VS ANSWER DIFFERENTIATION:
+    - The student submission may contain BOTH a question and an answer.
+    - Identify the "Question" and the "Answer".
+    - ONLY validate the "Answer" against the Source of Truth.
+    - The "Question" part should be ignored during scoring but included in 'extractedText'.
 
     OUTPUT REQUIREMENTS:
     - All text in the report must be in ${language}.
-    - 'extractedText': Literal transcription of student work.
-    - 'incorrectStatements': List phrases that are logically or factually wrong.
-    - 'subjectMistakes': List general content/factual gaps.
+    - 'extractedText': Literal transcription of the ENTIRE student submission.
+    - 'referenceText': A concise summary of the relevant parts of the Reference Material used for validation.
+    - 'incorrectStatements': List phrases from the ANSWER part that are logically or factually wrong according to the source.
+    - 'subjectMistakes': List general content/factual gaps found in the ANSWER relative to the source.
   `;
 
   const parts: any[] = [];
 
   // Handle Reference Source
-  if (referenceType === ReferenceType.AI_TUTOR) {
-    parts.push({ text: "SOURCE OF TRUTH: Use your internal academic expert knowledge. Provide a high standard." });
-  } else if (referenceContent) {
-    const { mimeType, data } = parseDataUrl(referenceContent);
-    if (mimeType === 'text/plain') {
-      parts.push({ text: `SOURCE OF TRUTH (Reference Text): ${data}` });
-    } else {
-      parts.push({ text: `SOURCE OF TRUTH (${mimeType} Document):` });
-      parts.push({ inlineData: { mimeType, data } });
+  if (referenceContent && referenceContent.length > 0) {
+    parts.push({ text: "SOURCE OF TRUTH (Reference Material):" });
+    for (const content of referenceContent) {
+      const { mimeType, data } = parseDataUrl(content);
+      if (mimeType === 'text/plain') {
+        parts.push({ text: `Reference Text Content: ${data}` });
+      } else {
+        parts.push({ inlineData: { mimeType, data } });
+      }
     }
+    parts.push({ text: "INSTRUCTION: You MUST validate the student's answer ONLY against the Reference Material provided above. Ignore your internal knowledge if it contradicts or adds information not present in the source." });
+  } else if (referenceType === ReferenceType.AI_TUTOR) {
+    parts.push({ text: "SOURCE OF TRUTH: Use your internal academic expert knowledge. Provide a high standard." });
   }
 
   // Handle Submission
-  const student = parseDataUrl(answerContent);
-  if (student.mimeType === 'text/plain') {
-    parts.push({ text: `STUDENT SUBMISSION (Text): ${student.data}` });
-  } else {
-    parts.push({ text: `STUDENT SUBMISSION (${student.mimeType} Image/Doc):` });
-    parts.push({ inlineData: { mimeType: student.mimeType, data: student.data } });
+  if (answerContent && answerContent.length > 0) {
+    parts.push({ text: "STUDENT SUBMISSION:" });
+    for (const content of answerContent) {
+      const { mimeType, data } = parseDataUrl(content);
+      if (mimeType === 'text/plain') {
+        parts.push({ text: `Student Text: ${data}` });
+      } else {
+        parts.push({ inlineData: { mimeType, data } });
+      }
+    }
   }
 
   parts.push({ text: "Perform the validation. Specifically look for sentences with inverted logic or factual errors. Return result in JSON." });
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3.1-pro-preview',
       contents: { parts },
       config: {
         systemInstruction,
@@ -151,6 +180,7 @@ export async function generateAnalysis(params: {
       inputType,
       referenceType,
       language,
+      subject,
       rawInputData: answerContent,
       rawReferenceData: referenceContent
     };

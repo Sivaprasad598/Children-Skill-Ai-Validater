@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, InputType, ReferenceType, ValidationReport, ValidationHistoryItem } from './types';
-import { LANGUAGES } from './constants';
+import { LANGUAGES, SUBJECTS } from './constants';
 import { storageService } from './services/storageService';
 import { generateAnalysis } from './services/geminiService';
 import Header from './components/Header';
@@ -75,13 +75,13 @@ const App: React.FC = () => {
   
   // Submission State
   const [inputType, setInputType] = useState<InputType>(InputType.TEXT);
-  const [inputValue, setInputValue] = useState<string>('');
-  const [uploadedAnswerName, setUploadedAnswerName] = useState<string>('');
+  const [inputValue, setInputValue] = useState<string[]>([]);
+  const [uploadedAnswerNames, setUploadedAnswerNames] = useState<string[]>([]);
   
   // Reference State
   const [referenceType, setReferenceType] = useState<ReferenceType>(ReferenceType.AI_TUTOR);
-  const [referenceValue, setReferenceValue] = useState<string>('');
-  const [uploadedRefName, setUploadedRefName] = useState<string>('');
+  const [referenceValue, setReferenceValue] = useState<string[]>([]);
+  const [uploadedRefNames, setUploadedRefNames] = useState<string[]>([]);
   
   // PDF Paging State
   const [refPdfPage, setRefPdfPage] = useState(1);
@@ -90,6 +90,7 @@ const App: React.FC = () => {
   const [subPdfTotal, setSubPdfTotal] = useState(1);
 
   const [outputLanguage, setOutputLanguage] = useState<string>('English');
+  const [selectedSubject, setSelectedSubject] = useState<string>('None');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [currentReport, setCurrentReport] = useState<ValidationReport | null>(null);
@@ -124,8 +125,8 @@ const App: React.FC = () => {
       const data = event.target?.result as string;
       
       if (isReference) {
-        setUploadedRefName(file.name || 'Ref Document');
-        setReferenceValue(data);
+        setUploadedRefNames(prev => [...prev, file.name || 'Ref Document']);
+        setReferenceValue(prev => [...prev, data]);
         setRefPdfPage(1);
         if (file.type.startsWith('image/')) {
           setReferenceType(ReferenceType.IMAGE);
@@ -135,8 +136,8 @@ const App: React.FC = () => {
           setReferenceType(ReferenceType.TEXT);
         }
       } else {
-        setUploadedAnswerName(file.name || 'Sub Document');
-        setInputValue(data);
+        setUploadedAnswerNames(prev => [...prev, file.name || 'Sub Document']);
+        setInputValue(prev => [...prev, data]);
         setSubPdfPage(1);
         if (file.type.startsWith('image/')) {
           setInputType(InputType.IMAGE);
@@ -168,21 +169,41 @@ const App: React.FC = () => {
   };
 
   const handleValidate = async () => {
-    if (!inputValue || !user) return;
+    if (inputValue.length === 0 || !user) return;
     setIsProcessing(true);
     try {
+      let finalReferenceContent = referenceType !== ReferenceType.AI_TUTOR ? referenceValue : undefined;
+      let finalReferenceType = referenceType;
+
+      // If AI Tutor is selected but a subject is chosen, fetch the internal subject doc from API
+      if (referenceType === ReferenceType.AI_TUTOR && selectedSubject !== 'None') {
+        try {
+          const response = await fetch(`/api/subjects/${encodeURIComponent(selectedSubject)}`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.content) {
+              finalReferenceContent = [data.content];
+            }
+          }
+        } catch (err) {
+          console.error("Failed to fetch subject content:", err);
+          // Fallback to AI's general knowledge if fetch fails
+        }
+      }
+
       const report = await generateAnalysis({
         inputType,
-        referenceType,
+        referenceType: finalReferenceType,
         language: outputLanguage,
         answerContent: inputValue,
-        referenceContent: referenceType !== ReferenceType.AI_TUTOR ? referenceValue : undefined
+        referenceContent: finalReferenceContent,
+        subject: selectedSubject
       });
 
       const fullReport: ValidationReport = {
         ...report,
         rawInputData: inputValue,
-        rawReferenceData: referenceValue
+        rawReferenceData: finalReferenceContent || []
       };
 
       setCurrentReport(fullReport);
@@ -235,26 +256,41 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="p-6 md:p-10 flex-1 flex flex-col gap-6">
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      { id: ReferenceType.AI_TUTOR, label: 'AI' },
-                      { id: ReferenceType.TEXT, label: 'Text' },
-                      { id: ReferenceType.PDF, label: 'PDF' },
-                      { id: ReferenceType.IMAGE, label: 'Image' }
-                    ].map(btn => (
-                      <button
-                        key={btn.id}
-                        onClick={() => { 
-                          setReferenceType(btn.id); 
-                          setReferenceValue(''); 
-                          setUploadedRefName(''); 
-                          setRefPdfPage(1);
-                        }}
-                        className={`px-4 md:px-6 py-2.5 rounded-xl md:rounded-2xl text-[10px] md:text-xs font-black uppercase tracking-wider transition-all border-2 ${referenceType === btn.id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-400 border-slate-100'}`}
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { id: ReferenceType.AI_TUTOR, label: 'AI' },
+                        { id: ReferenceType.TEXT, label: 'Text' },
+                        { id: ReferenceType.PDF, label: 'PDF' },
+                        { id: ReferenceType.IMAGE, label: 'Image' }
+                      ].map(btn => (
+                        <button
+                          key={btn.id}
+                          onClick={() => { 
+                            setReferenceType(btn.id); 
+                            setReferenceValue([]); 
+                            setUploadedRefNames([]); 
+                            setRefPdfPage(1);
+                          }}
+                          className={`px-4 md:px-6 py-2.5 rounded-xl md:rounded-2xl text-[10px] md:text-xs font-black uppercase tracking-wider transition-all border-2 ${referenceType === btn.id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-400 border-slate-100'}`}
+                        >
+                          {btn.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex-1 w-full space-y-1.5">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block px-2">Subject Context</label>
+                      <select 
+                        value={selectedSubject}
+                        onChange={(e) => setSelectedSubject(e.target.value)}
+                        className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-emerald-500 font-bold text-slate-700 text-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20viewBox%3D%220%200%2020%2020%22%20fill%3D%22none%22%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%3E%3Cpath%20d%3D%22M5%207.5L10%2012.5L15%207.5%22%20stroke%3D%22%2310b981%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22/%3E%3C/svg%3E')] bg-[length:20px_20px] bg-[right_1.2rem_center] bg-no-repeat"
                       >
-                        {btn.label}
-                      </button>
-                    ))}
+                        {SUBJECTS.map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
                   <div className="flex-1 flex flex-col justify-center min-h-[350px]">
@@ -272,8 +308,8 @@ const App: React.FC = () => {
                       <textarea
                         placeholder="Paste source material here..."
                         className="w-full flex-1 min-h-[350px] p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] focus:border-emerald-500 outline-none transition-all resize-none text-sm md:text-base font-medium"
-                        value={referenceValue}
-                        onChange={(e) => setReferenceValue(e.target.value)}
+                        value={referenceValue[0] || ''}
+                        onChange={(e) => setReferenceValue([e.target.value])}
                       />
                     )}
 
@@ -293,7 +329,7 @@ const App: React.FC = () => {
                             <p className="text-base font-black text-slate-800">Select PDF Source</p>
                           </div>
                         </div>
-                        {referenceValue && (
+                        {referenceValue.length > 0 && (
                           <div className="flex-1 flex flex-col bg-slate-50 border-2 border-slate-100 rounded-[2.5rem] p-5 md:p-8 animate-in fade-in zoom-in duration-500">
                              <div className="flex items-center justify-between mb-6">
                                <div className="flex flex-col">
@@ -308,17 +344,17 @@ const App: React.FC = () => {
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M9 5l7 7-7 7" /></svg>
                                   </button>
                                   <button onClick={() => shufflePdf(true)} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-emerald-600 hover:bg-emerald-50 transition-all shadow-sm" title="Random Page">
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357-2H15" /></svg>
                                   </button>
-                                  <button onClick={() => {setReferenceValue(''); setUploadedRefName('');}} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-red-400 hover:text-red-600 transition-all shadow-sm" title="Remove">
+                                  <button onClick={() => {setReferenceValue([]); setUploadedRefNames([]);}} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-red-400 hover:text-red-600 transition-all shadow-sm" title="Remove">
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
                                   </button>
                                </div>
                             </div>
                             <div className="flex-1 min-h-[400px] relative rounded-2xl overflow-hidden bg-white border-2 border-slate-100 shadow-inner">
-                               <PdfPagePreview dataUrl={referenceValue} pageNumber={refPdfPage} onDocumentLoad={setRefPdfTotal} />
+                               <PdfPagePreview dataUrl={referenceValue[0]} pageNumber={refPdfPage} onDocumentLoad={setRefPdfTotal} />
                             </div>
-                            <p className="mt-4 text-[10px] text-slate-400 font-bold uppercase tracking-tight truncate">{uploadedRefName}</p>
+                            <p className="mt-4 text-[10px] text-slate-400 font-bold uppercase tracking-tight truncate">{uploadedRefNames.join(', ')}</p>
                           </div>
                         )}
                       </div>
@@ -339,14 +375,27 @@ const App: React.FC = () => {
                           </div>
                         </button>
                         
-                        {referenceValue && (
+                        {referenceValue.length > 0 && (
                           <div className="p-5 bg-slate-50 border-2 border-slate-100 rounded-[2.5rem] flex-1 flex flex-col animate-in fade-in zoom-in duration-500">
-                            <div className="flex-1 min-h-[300px] rounded-2xl overflow-hidden shadow-inner bg-slate-200 border border-slate-200 mb-4">
-                               <img src={referenceValue} alt="Ref" className="w-full h-full object-contain" />
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                               {referenceValue.map((val, idx) => (
+                                 <div key={idx} className="aspect-square rounded-xl overflow-hidden shadow-inner bg-slate-200 border border-slate-200 relative group">
+                                    <img src={val} alt={`Ref ${idx}`} className="w-full h-full object-cover" />
+                                    <button 
+                                      onClick={() => {
+                                        setReferenceValue(prev => prev.filter((_, i) => i !== idx));
+                                        setUploadedRefNames(prev => prev.filter((_, i) => i !== idx));
+                                      }}
+                                      className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
+                                    </button>
+                                 </div>
+                               ))}
                             </div>
                             <div className="flex items-center justify-between">
-                               <span className="text-[10px] font-bold text-slate-500 truncate max-w-[80%]">{uploadedRefName}</span>
-                               <button onClick={() => {setReferenceValue(''); setUploadedRefName('');}} className="text-[10px] font-black text-red-400 uppercase tracking-wider hover:text-red-600">Delete</button>
+                               <span className="text-[10px] font-bold text-slate-500 truncate max-w-[80%]">{uploadedRefNames.join(', ')}</span>
+                               <button onClick={() => {setReferenceValue([]); setUploadedRefNames([]);}} className="text-[10px] font-black text-red-400 uppercase tracking-wider hover:text-red-600">Delete All</button>
                             </div>
                           </div>
                         )}
@@ -377,8 +426,8 @@ const App: React.FC = () => {
                         key={btn.id}
                         onClick={() => { 
                           setInputType(btn.id); 
-                          setInputValue(''); 
-                          setUploadedAnswerName(''); 
+                          setInputValue([]); 
+                          setUploadedAnswerNames([]); 
                           setSubPdfPage(1);
                         }}
                         className={`px-4 md:px-6 py-2.5 rounded-xl md:rounded-2xl text-[10px] md:text-xs font-black uppercase tracking-wider transition-all border-2 ${inputType === btn.id ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-slate-400 border-slate-100'}`}
@@ -393,8 +442,8 @@ const App: React.FC = () => {
                       <textarea
                         placeholder="Type your response here..."
                         className="w-full flex-1 min-h-[350px] p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] focus:border-teal-500 outline-none transition-all resize-none text-sm md:text-base font-medium"
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
+                        value={inputValue[0] || ''}
+                        onChange={(e) => setInputValue([e.target.value])}
                       />
                     )}
 
@@ -414,7 +463,7 @@ const App: React.FC = () => {
                             <p className="text-base font-black text-slate-800">Change Submission PDF</p>
                           </div>
                         </div>
-                        {inputValue && (
+                        {inputValue.length > 0 && (
                           <div className="flex-1 flex flex-col bg-slate-50 border-2 border-slate-100 rounded-[2.5rem] p-5 md:p-8 animate-in fade-in zoom-in duration-500">
                              <div className="flex items-center justify-between mb-6">
                                <div className="flex flex-col">
@@ -431,15 +480,15 @@ const App: React.FC = () => {
                                   <button onClick={() => shufflePdf(false)} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-teal-600 hover:bg-teal-50 transition-all shadow-sm" title="Random Page">
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                                   </button>
-                                  <button onClick={() => {setInputValue(''); setUploadedAnswerName('');}} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-red-400 hover:text-red-600 transition-all shadow-sm" title="Remove">
+                                  <button onClick={() => {setInputValue([]); setUploadedAnswerNames([]);}} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-red-400 hover:text-red-600 transition-all shadow-sm" title="Remove">
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
                                   </button>
                                </div>
                             </div>
                             <div className="flex-1 min-h-[400px] relative rounded-2xl overflow-hidden bg-white border-2 border-slate-100 shadow-inner">
-                               <PdfPagePreview dataUrl={inputValue} pageNumber={subPdfPage} onDocumentLoad={setSubPdfTotal} />
+                               <PdfPagePreview dataUrl={inputValue[0]} pageNumber={subPdfPage} onDocumentLoad={setSubPdfTotal} />
                             </div>
-                            <p className="mt-4 text-[10px] text-slate-400 font-bold uppercase tracking-tight truncate">{uploadedAnswerName}</p>
+                            <p className="mt-4 text-[10px] text-slate-400 font-bold uppercase tracking-tight truncate">{uploadedAnswerNames.join(', ')}</p>
                           </div>
                         )}
                       </div>
@@ -460,14 +509,27 @@ const App: React.FC = () => {
                           </div>
                         </button>
 
-                        {inputValue && (
+                        {inputValue.length > 0 && (
                           <div className="p-5 bg-slate-50 border-2 border-slate-100 rounded-[2.5rem] flex-1 flex flex-col animate-in fade-in zoom-in duration-500">
-                            <div className="flex-1 min-h-[300px] rounded-2xl overflow-hidden shadow-inner bg-slate-200 border border-slate-200 mb-4">
-                               <img src={inputValue} alt="Sub" className="w-full h-full object-contain" />
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                               {inputValue.map((val, idx) => (
+                                 <div key={idx} className="aspect-square rounded-xl overflow-hidden shadow-inner bg-slate-200 border border-slate-200 relative group">
+                                    <img src={val} alt={`Sub ${idx}`} className="w-full h-full object-cover" />
+                                    <button 
+                                      onClick={() => {
+                                        setInputValue(prev => prev.filter((_, i) => i !== idx));
+                                        setUploadedAnswerNames(prev => prev.filter((_, i) => i !== idx));
+                                      }}
+                                      className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
+                                    </button>
+                                 </div>
+                               ))}
                             </div>
                             <div className="flex items-center justify-between">
-                               <span className="text-[10px] font-bold text-slate-500 truncate max-w-[80%]">{uploadedAnswerName}</span>
-                               <button onClick={() => {setInputValue(''); setUploadedAnswerName('');}} className="text-[10px] font-black text-red-400 uppercase tracking-wider hover:text-red-600">Delete</button>
+                               <span className="text-[10px] font-bold text-slate-500 truncate max-w-[80%]">{uploadedAnswerNames.join(', ')}</span>
+                               <button onClick={() => {setInputValue([]); setUploadedAnswerNames([]);}} className="text-[10px] font-black text-red-400 uppercase tracking-wider hover:text-red-600">Delete All</button>
                             </div>
                           </div>
                         )}

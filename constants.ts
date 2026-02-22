@@ -10,3 +10,17 @@ export const LANGUAGES = [
   { code: 'German', name: 'German' },
   { code: 'Arabic', name: 'Arabic' }
 ];
+
+export const SUBJECTS = [
+  'None',
+  'Telugu',
+  'English',
+  'Hindi',
+  'Maths',
+  'General Knowledge',
+  'Environmental Studies',
+  'Computer Science',
+  'Moral Science',
+  'Physics',
+  'Social'
+];

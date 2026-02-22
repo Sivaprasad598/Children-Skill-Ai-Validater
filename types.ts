@@ -13,6 +13,20 @@ export enum ReferenceType {
   IMAGE = 'IMAGE'
 }
 
+export enum Subject {
+  NONE = 'None',
+  TELUGU = 'Telugu',
+  ENGLISH = 'English',
+  HINDI = 'Hindi',
+  MATHS = 'Maths',
+  GENERAL_KNOWLEDGE = 'General Knowledge',
+  ENVIRONMENTAL_STUDIES = 'Environmental Studies',
+  COMPUTER_SCIENCE = 'Computer Science',
+  MORAL_SCIENCE = 'Moral Science',
+  PHYSICS = 'Physics',
+  SOCIAL = 'Social'
+}
+
 export interface User {
   id: string;
   name: string;
@@ -51,8 +65,9 @@ export interface ValidationReport {
   insights: string[];
   extractedText: string;
   referenceText?: string;
-  rawInputData?: string; // Base64 or Text
-  rawReferenceData?: string; // Base64 or Text
+  subject?: string;
+  rawInputData?: string[]; // Array of Base64 or Text
+  rawReferenceData?: string[]; // Array of Base64 or Text
 }
 
 export interface ValidationHistoryItem {

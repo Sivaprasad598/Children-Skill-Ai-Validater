@@ -159,9 +159,18 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
           <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Validation Report</h2>
           <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-1">BrainGauge Semantic Analysis v2.5</p>
         </div>
-        <button onClick={onClose} className="w-full sm:w-auto px-8 py-3 bg-slate-100 hover:bg-slate-200 rounded-full font-black text-slate-600 transition-all text-sm">
-          Dismiss Report
-        </button>
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <button 
+            onClick={onClose} 
+            className="flex-1 sm:flex-none px-8 py-3 bg-emerald-600 hover:bg-emerald-700 rounded-full font-black text-white transition-all text-sm shadow-md flex items-center justify-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357-2H15" /></svg>
+            Retry Validation
+          </button>
+          <button onClick={onClose} className="flex-1 sm:flex-none px-8 py-3 bg-slate-100 hover:bg-slate-200 rounded-full font-black text-slate-600 transition-all text-sm">
+            Dismiss
+          </button>
+        </div>
       </div>
 
       {/* Primary Highlights: Annotated Submission */}
@@ -240,35 +249,87 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
         {/* Source Tracking */}
         <div className="bg-white p-8 md:p-10 rounded-[2rem] md:rounded-[3rem] shadow-xl border border-emerald-50 space-y-4 md:col-span-2 lg:col-span-1">
           <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Logic Source</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3 md:gap-4">
-             <div className="p-4 bg-slate-50 rounded-2xl md:rounded-3xl flex items-center justify-between border border-transparent hover:border-emerald-100 transition-all">
-                <div className="min-w-0">
-                  <p className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase truncate">Validator</p>
-                  <p className="text-xs md:text-sm font-bold text-slate-800 truncate">{report.referenceType}</p>
+          <div className="grid grid-cols-1 gap-3 md:gap-4">
+             <div className="p-4 bg-slate-50 rounded-2xl md:rounded-3xl flex flex-col gap-3 border border-transparent hover:border-emerald-100 transition-all">
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <p className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase truncate">Validator</p>
+                    <p className="text-xs md:text-sm font-bold text-slate-800 truncate">
+                      {report.referenceType === ReferenceType.AI_TUTOR && report.subject && report.subject !== 'None' 
+                        ? `AI (${report.subject})` 
+                        : report.referenceType}
+                    </p>
+                  </div>
                 </div>
-                {report.referenceType !== ReferenceType.AI_TUTOR && report.rawReferenceData && (
-                  <button 
-                    onClick={() => handleViewSource(true)}
-                    className="flex-shrink-0 p-2.5 bg-emerald-600 text-white rounded-xl shadow-lg transition-all active:scale-95"
-                    title="View Source"
-                  >
-                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>
-                  </button>
+                {report.rawReferenceData && report.rawReferenceData.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {report.rawReferenceData.map((data, idx) => (
+                      <button 
+                        key={idx}
+                        onClick={() => {
+                          let type: 'IMAGE' | 'TEXT' | 'PDF' = 'TEXT';
+                          if (data.startsWith('data:application/pdf')) type = 'PDF';
+                          else if (data.startsWith('data:image/')) type = 'IMAGE';
+                          // If it's AI Tutor and we have a subject, it's likely the subject doc we fetched
+                          else if (report.referenceType === ReferenceType.AI_TUTOR && report.subject && report.subject !== 'None') {
+                            // Even if it's just text, the user calls it a "pdf doc"
+                            type = 'TEXT'; 
+                          }
+
+                          setModalPdfPage(1);
+                          setModalContent({ 
+                            title: report.referenceType === ReferenceType.AI_TUTOR && report.subject && report.subject !== 'None'
+                              ? `${report.subject} Reference`
+                              : `Validator Source ${idx + 1}`, 
+                            data, 
+                            type 
+                          });
+                        }}
+                        className="w-10 h-10 bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm hover:border-emerald-500 transition-all flex items-center justify-center"
+                      >
+                        {data.startsWith('data:image/') ? (
+                          <img src={data} alt="Ref" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center text-[8px] font-black text-emerald-600 leading-none">
+                            {data.startsWith('data:application/pdf') ? 'PDF' : (
+                              report.referenceType === ReferenceType.AI_TUTOR ? 'DOC' : 'TXT'
+                            )}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 )}
              </div>
-             <div className="p-4 bg-slate-50 rounded-2xl md:rounded-3xl flex items-center justify-between border border-transparent hover:border-teal-100 transition-all">
-                <div className="min-w-0">
-                  <p className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase truncate">Input</p>
-                  <p className="text-xs md:text-sm font-bold text-slate-800 truncate">{report.inputType}</p>
+             <div className="p-4 bg-slate-50 rounded-2xl md:rounded-3xl flex flex-col gap-3 border border-transparent hover:border-teal-100 transition-all">
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <p className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase truncate">Input</p>
+                    <p className="text-xs md:text-sm font-bold text-slate-800 truncate">{report.inputType}</p>
+                  </div>
                 </div>
-                {report.rawInputData && (
-                  <button 
-                    onClick={() => handleViewSource(false)}
-                    className="flex-shrink-0 p-2.5 bg-teal-600 text-white rounded-xl shadow-lg transition-all active:scale-95"
-                    title="View Original Submission"
-                  >
-                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>
-                  </button>
+                {report.rawInputData && report.rawInputData.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {report.rawInputData.map((data, idx) => (
+                      <button 
+                        key={idx}
+                        onClick={() => {
+                          const type = data.startsWith('data:application/pdf') ? 'PDF' : (data.startsWith('data:image/') ? 'IMAGE' : 'TEXT');
+                          setModalPdfPage(1);
+                          setModalContent({ title: `Submission ${idx + 1}`, data, type });
+                        }}
+                        className="w-10 h-10 bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm hover:border-teal-500 transition-all"
+                      >
+                        {data.startsWith('data:image/') ? (
+                          <img src={data} alt="Sub" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-[8px] font-black text-teal-600">
+                            {data.startsWith('data:application/pdf') ? 'PDF' : 'TXT'}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 )}
              </div>
           </div>
