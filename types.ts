@@ -56,8 +56,10 @@ export interface ValidationReport {
   referenceType: ReferenceType;
   language: string;
   overallAccuracy: number;
-  calligraphyScore?: number;
+  subjectContextScore: number;
+  structureScore: number;
   grammarScore: number;
+  calligraphyScore?: number;
   spellingMistakes: Mistake[];
   grammarMistakes: Mistake[];
   subjectMistakes: string[];
@@ -66,6 +68,7 @@ export interface ValidationReport {
   extractedText: string;
   referenceText?: string;
   subject?: string;
+  subjectFile?: string;
   rawInputData?: string[]; // Array of Base64 or Text
   rawReferenceData?: string[]; // Array of Base64 or Text
 }

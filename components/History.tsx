@@ -69,6 +69,12 @@ const History: React.FC<HistoryProps> = ({ history, onSelectItem }) => {
                       <span className="w-1 h-1 bg-teal-400 rounded-full"></span>
                       {item.referenceType}
                     </div>
+                    {item.report.subject && item.report.subject !== 'None' && (
+                      <div className="flex items-center gap-1">
+                        <span className="w-1 h-1 bg-amber-400 rounded-full"></span>
+                        {item.report.subject}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

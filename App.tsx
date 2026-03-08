@@ -10,21 +10,84 @@ import History from './components/History';
 import * as pdfjsLib from 'pdfjs-dist';
 
 // Configure pdf.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.mjs`;
+const PDF_JS_VERSION = '4.10.38';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${PDF_JS_VERSION}/build/pdf.worker.min.mjs`;
+
+// Specialized Text renderer component
+const TextPreview: React.FC<{ dataUrl: string }> = ({ dataUrl }) => {
+  const [text, setText] = useState('');
+  useEffect(() => {
+    if (!dataUrl) return;
+    if (dataUrl.startsWith('data:text/plain;base64,')) {
+      const base64 = dataUrl.split(',')[1];
+      try {
+        setText(atob(base64));
+      } catch (e) {
+        setText('Error decoding text content.');
+      }
+    } else if (dataUrl.startsWith('data:')) {
+      // Try to extract text even if mime type is different but content might be text
+      const parts = dataUrl.split(',');
+      if (parts.length > 1) {
+        try {
+          setText(atob(parts[1]));
+        } catch (e) {
+          setText('Content is not valid text.');
+        }
+      }
+    } else {
+      setText(dataUrl);
+    }
+  }, [dataUrl]);
+
+  return (
+    <div className="w-full h-full p-6 md:p-10 overflow-auto bg-white font-medium text-slate-700 whitespace-pre-wrap text-sm md:text-base text-left">
+      {text}
+    </div>
+  );
+};
 
 // Specialized PDF renderer component
 export const PdfPagePreview: React.FC<{ dataUrl: string; pageNumber: number; onDocumentLoad?: (numPages: number) => void }> = ({ dataUrl, pageNumber, onDocumentLoad }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isTextFallback, setIsTextFallback] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
     const renderPage = async () => {
       if (!dataUrl) return;
       setLoading(true);
+      setError(null);
+      setIsTextFallback(null);
       try {
-        const loadingTask = pdfjsLib.getDocument(dataUrl);
+        console.log("Loading PDF from:", dataUrl);
+        let pdfData: any = dataUrl;
+        
+        // If it's a URL/path, fetch it first to ensure we have the data and can handle errors
+        if (dataUrl.startsWith('/') || dataUrl.startsWith('http')) {
+          const response = await fetch(dataUrl);
+          if (!response.ok) throw new Error(`Failed to fetch PDF: ${response.statusText} (${response.status})`);
+          
+          const contentType = response.headers.get('Content-Type');
+          if (contentType && contentType.includes('text/plain')) {
+            const text = await response.text();
+            if (isMounted) {
+              setIsTextFallback(text);
+              setLoading(false);
+            }
+            return;
+          }
+
+          const arrayBuffer = await response.arrayBuffer();
+          console.log("Fetched PDF size:", arrayBuffer.byteLength);
+          pdfData = { data: new Uint8Array(arrayBuffer) };
+        }
+
+        const loadingTask = pdfjsLib.getDocument(pdfData);
         const pdf = await loadingTask.promise;
+        console.log("PDF loaded, pages:", pdf.numPages);
         if (onDocumentLoad) onDocumentLoad(pdf.numPages);
         
         const targetPage = Math.min(Math.max(1, pageNumber), pdf.numPages);
@@ -46,8 +109,9 @@ export const PdfPagePreview: React.FC<{ dataUrl: string; pageNumber: number; onD
             await page.render(renderContext).promise;
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("PDF Component Error:", err);
+        if (isMounted) setError(err.message || "Failed to load PDF");
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -57,11 +121,22 @@ export const PdfPagePreview: React.FC<{ dataUrl: string; pageNumber: number; onD
     return () => { isMounted = false; };
   }, [dataUrl, pageNumber]);
 
+  if (isTextFallback) {
+    return <TextPreview dataUrl={`data:text/plain;base64,${btoa(unescape(encodeURIComponent(isTextFallback)))}`} />;
+  }
+
   return (
     <div className="relative w-full h-full flex items-center justify-center bg-slate-50 overflow-hidden rounded-xl">
       {loading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-50/40 backdrop-blur-sm">
           <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      )}
+      {error && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-red-50 p-6 text-center">
+          <svg className="w-12 h-12 text-red-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          <p className="text-red-600 font-bold mb-2">PDF Error</p>
+          <p className="text-red-500 text-xs">{error}</p>
         </div>
       )}
       <canvas ref={canvasRef} className="max-w-full max-h-full object-contain shadow-sm" />
@@ -91,7 +166,37 @@ const App: React.FC = () => {
 
   const [outputLanguage, setOutputLanguage] = useState<string>('English');
   const [selectedSubject, setSelectedSubject] = useState<string>('None');
+  const [subjectPreviewContent, setSubjectPreviewContent] = useState<string | null>(null);
+  const [subjectPreviewFile, setSubjectPreviewFile] = useState<string | null>(null);
+  const [activeSubjectFile, setActiveSubjectFile] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  useEffect(() => {
+    // Clear previous subject content immediately to avoid stale previews
+    setSubjectPreviewContent(null);
+    setSubjectPreviewFile(null);
+    setRefPdfPage(1);
+
+    if (selectedSubject !== 'None') {
+      const subjectFileMap: Record<string, string> = {
+        'telugu': 'telugu.pdf',
+        'english': 'english.pdf',
+        'hindi': 'hindi.pdf',
+        'maths': 'maths.pdf',
+        'general knowledge': 'general_knowledge.pdf',
+        'environmental studies': 'environmental_studies.pdf',
+        'computer science': 'Computer Science.pdf',
+        'moral science': 'moral_science.pdf'
+      };
+      
+      const fileName = subjectFileMap[selectedSubject.toLowerCase()];
+      if (fileName) {
+        const cacheBuster = Date.now();
+        setSubjectPreviewContent(`/subjects/${fileName}?t=${cacheBuster}`);
+        setSubjectPreviewFile(fileName);
+      }
+    }
+  }, [selectedSubject]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [currentReport, setCurrentReport] = useState<ValidationReport | null>(null);
   const [history, setHistory] = useState<ValidationHistoryItem[]>([]);
@@ -174,21 +279,30 @@ const App: React.FC = () => {
     try {
       let finalReferenceContent = referenceType !== ReferenceType.AI_TUTOR ? referenceValue : undefined;
       let finalReferenceType = referenceType;
+      setActiveSubjectFile(null);
 
-      // If AI Tutor is selected but a subject is chosen, fetch the internal subject doc from API
-      if (referenceType === ReferenceType.AI_TUTOR && selectedSubject !== 'None') {
-        try {
-          const response = await fetch(`/api/subjects/${encodeURIComponent(selectedSubject)}`);
-          if (response.ok) {
-            const data = await response.json();
-            if (data.content) {
-              finalReferenceContent = [data.content];
-            }
+      // If AI Tutor is selected but a subject is chosen, use the preview content
+      if (referenceType === ReferenceType.AI_TUTOR && selectedSubject !== 'None' && subjectPreviewContent) {
+        let content = subjectPreviewContent;
+        
+        // If it's a path, fetch the content and convert to data URL for Gemini
+        if (subjectPreviewContent.startsWith('/subjects/')) {
+          try {
+            const resp = await fetch(subjectPreviewContent);
+            const blob = await resp.blob();
+            content = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          } catch (err) {
+            console.error("Failed to fetch subject content for validation:", err);
           }
-        } catch (err) {
-          console.error("Failed to fetch subject content:", err);
-          // Fallback to AI's general knowledge if fetch fails
         }
+        
+        finalReferenceContent = [content];
+        setActiveSubjectFile(subjectPreviewFile);
       }
 
       const report = await generateAnalysis({
@@ -202,6 +316,7 @@ const App: React.FC = () => {
 
       const fullReport: ValidationReport = {
         ...report,
+        subjectFile: activeSubjectFile || undefined,
         rawInputData: inputValue,
         rawReferenceData: finalReferenceContent || []
       };
@@ -209,7 +324,7 @@ const App: React.FC = () => {
       setCurrentReport(fullReport);
       
       const historyItem: ValidationHistoryItem = {
-        id: crypto.randomUUID(),
+        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
         userId: user.id,
         date: new Date().toISOString(),
         inputType,
@@ -240,171 +355,91 @@ const App: React.FC = () => {
       <main className="flex-1 max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-10 w-full">
         {activeTab === 'validate' && !currentReport && (
           <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
-            <div className="text-center space-y-2">
+            <div className="text-center space-y-4">
               <h1 className="text-3xl md:text-5xl font-black text-slate-900 tracking-tighter">AI Verification Hub</h1>
               <p className="text-slate-500 max-w-xl mx-auto text-sm md:text-lg font-medium">Validation powered by BrainGauge Academic Core.</p>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-10">
-              {/* Reference Source Panel */}
-              <div className="bg-white rounded-[2rem] md:rounded-[3.5rem] shadow-2xl border border-emerald-100 overflow-hidden flex flex-col">
-                <div className="bg-slate-900 p-6 md:p-8 text-white">
-                  <h3 className="text-xl md:text-2xl font-black flex items-center gap-3">
-                    <span className="w-8 h-8 md:w-10 md:h-10 bg-emerald-500 rounded-xl flex items-center justify-center text-white text-sm md:text-base">01</span>
-                    Source of Truth
-                  </h3>
-                </div>
-
-                <div className="p-6 md:p-10 flex-1 flex flex-col gap-6">
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap gap-2">
-                      {[
-                        { id: ReferenceType.AI_TUTOR, label: 'AI' },
-                        { id: ReferenceType.TEXT, label: 'Text' },
-                        { id: ReferenceType.PDF, label: 'PDF' },
-                        { id: ReferenceType.IMAGE, label: 'Image' }
-                      ].map(btn => (
-                        <button
-                          key={btn.id}
-                          onClick={() => { 
-                            setReferenceType(btn.id); 
-                            setReferenceValue([]); 
-                            setUploadedRefNames([]); 
-                            setRefPdfPage(1);
-                          }}
-                          className={`px-4 md:px-6 py-2.5 rounded-xl md:rounded-2xl text-[10px] md:text-xs font-black uppercase tracking-wider transition-all border-2 ${referenceType === btn.id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-400 border-slate-100'}`}
-                        >
-                          {btn.label}
-                        </button>
-                      ))}
+              
+              <div className="max-w-md mx-auto pt-4">
+                 <div className="bg-white p-4 rounded-3xl shadow-lg border border-emerald-100 flex flex-col gap-2 relative overflow-hidden">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block px-2 text-left">Academic Subject Context</label>
+                  <select 
+                    value={selectedSubject}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedSubject(val);
+                      // Automatically switch to AI tab when a subject is selected
+                      if (val !== 'None') {
+                        setReferenceType(ReferenceType.AI_TUTOR);
+                      }
+                    }}
+                    className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-emerald-500 font-bold text-slate-700 text-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20viewBox%3D%220%200%2020%2020%22%20fill%3D%22none%22%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%3E%3Cpath%20d%3D%22M5%207.5L10%2012.5L15%207.5%22%20stroke%3D%22%2310b981%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22/%3E%3C/svg%3E')] bg-[length:20px_20px] bg-[right_1.2rem_center] bg-no-repeat disabled:opacity-50"
+                  >
+                    {SUBJECTS.map(s => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  {activeSubjectFile && (
+                    <div className="px-2 pt-1 flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">
+                        Referring to: <span className="text-emerald-600">{activeSubjectFile}</span>
+                      </span>
                     </div>
-
-                    <div className="flex-1 w-full space-y-1.5">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block px-2">Subject Context</label>
-                      <select 
-                        value={selectedSubject}
-                        onChange={(e) => setSelectedSubject(e.target.value)}
-                        className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-emerald-500 font-bold text-slate-700 text-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20viewBox%3D%220%200%2020%2020%22%20fill%3D%22none%22%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%3E%3Cpath%20d%3D%22M5%207.5L10%2012.5L15%207.5%22%20stroke%3D%22%2310b981%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22/%3E%3C/svg%3E')] bg-[length:20px_20px] bg-[right_1.2rem_center] bg-no-repeat"
-                      >
-                        {SUBJECTS.map(s => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="flex-1 flex flex-col justify-center min-h-[350px]">
-                    {referenceType === ReferenceType.AI_TUTOR && (
-                      <div className="p-10 bg-emerald-50/50 rounded-[2rem] border-2 border-emerald-100 border-dashed text-center">
-                        <div className="w-16 h-16 bg-white rounded-3xl flex items-center justify-center mx-auto mb-4 text-emerald-600 shadow-md">
-                          <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                        </div>
-                        <h4 className="text-xl font-black text-emerald-900">Expert AI Mode</h4>
-                        <p className="text-sm text-emerald-700/60 mt-2">Comparing against AI global knowledge standards.</p>
-                      </div>
-                    )}
-
-                    {referenceType === ReferenceType.TEXT && (
-                      <textarea
-                        placeholder="Paste source material here..."
-                        className="w-full flex-1 min-h-[350px] p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] focus:border-emerald-500 outline-none transition-all resize-none text-sm md:text-base font-medium"
-                        value={referenceValue[0] || ''}
-                        onChange={(e) => setReferenceValue([e.target.value])}
-                      />
-                    )}
-
-                    {referenceType === ReferenceType.PDF && (
-                      <div className="space-y-6 flex-1 flex flex-col">
-                        <div className="border-3 border-dashed border-slate-200 rounded-[2rem] p-10 text-center hover:bg-emerald-50/30 transition-all cursor-pointer relative group">
-                          <input 
-                            type="file" 
-                            accept="application/pdf" 
-                            onChange={(e) => { const f = e.target.files?.[0]; if(f) handleFileRead(f, true); }}
-                            className="absolute inset-0 opacity-0 cursor-pointer" 
-                          />
-                          <div className="flex flex-col items-center gap-3">
-                            <div className="p-4 bg-white shadow-xl rounded-2xl text-emerald-600">
-                              <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                            </div>
-                            <p className="text-base font-black text-slate-800">Select PDF Source</p>
-                          </div>
-                        </div>
-                        {referenceValue.length > 0 && (
-                          <div className="flex-1 flex flex-col bg-slate-50 border-2 border-slate-100 rounded-[2.5rem] p-5 md:p-8 animate-in fade-in zoom-in duration-500">
-                             <div className="flex items-center justify-between mb-6">
-                               <div className="flex flex-col">
-                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Viewing Page</p>
-                                 <span className="text-xs font-black text-emerald-600">{refPdfPage} <span className="text-slate-300 mx-1">/</span> {refPdfTotal}</span>
-                               </div>
-                               <div className="flex items-center gap-2">
-                                  <button onClick={() => setRefPdfPage(p => Math.max(1, p - 1))} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-slate-600 hover:text-emerald-600 transition-all shadow-sm disabled:opacity-30 disabled:hover:text-slate-600" disabled={refPdfPage <= 1}>
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15 19l-7-7 7-7" /></svg>
-                                  </button>
-                                  <button onClick={() => setRefPdfPage(p => Math.min(refPdfTotal, p + 1))} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-slate-600 hover:text-emerald-600 transition-all shadow-sm disabled:opacity-30 disabled:hover:text-slate-600" disabled={refPdfPage >= refPdfTotal}>
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M9 5l7 7-7 7" /></svg>
-                                  </button>
-                                  <button onClick={() => shufflePdf(true)} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-emerald-600 hover:bg-emerald-50 transition-all shadow-sm" title="Random Page">
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357-2H15" /></svg>
-                                  </button>
-                                  <button onClick={() => {setReferenceValue([]); setUploadedRefNames([]);}} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-red-400 hover:text-red-600 transition-all shadow-sm" title="Remove">
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
-                                  </button>
-                               </div>
-                            </div>
-                            <div className="flex-1 min-h-[400px] relative rounded-2xl overflow-hidden bg-white border-2 border-slate-100 shadow-inner">
-                               <PdfPagePreview dataUrl={referenceValue[0]} pageNumber={refPdfPage} onDocumentLoad={setRefPdfTotal} />
-                            </div>
-                            <p className="mt-4 text-[10px] text-slate-400 font-bold uppercase tracking-tight truncate">{uploadedRefNames.join(', ')}</p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {referenceType === ReferenceType.IMAGE && (
-                      <div className="space-y-6 flex-1 flex flex-col">
-                        <button 
-                          onClick={() => refImageInput.current?.click()} 
-                          className="flex flex-col items-center justify-center gap-4 p-12 bg-slate-50 border-2 border-slate-100 border-dashed rounded-[2rem] hover:bg-emerald-50 hover:border-emerald-200 transition-all shadow-sm active:scale-95 group"
-                        >
-                          <div className="p-5 bg-white rounded-2xl shadow-md text-emerald-500 group-hover:scale-110 transition-transform">
-                            <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                          </div>
-                          <div className="text-center">
-                            <span className="block text-sm font-black text-slate-800 uppercase tracking-widest">Upload or Take Photo</span>
-                            <span className="text-[10px] text-slate-400 font-bold">Tap to access Camera or Library</span>
-                          </div>
-                        </button>
-                        
-                        {referenceValue.length > 0 && (
-                          <div className="p-5 bg-slate-50 border-2 border-slate-100 rounded-[2.5rem] flex-1 flex flex-col animate-in fade-in zoom-in duration-500">
-                            <div className="grid grid-cols-2 gap-2 mb-4">
-                               {referenceValue.map((val, idx) => (
-                                 <div key={idx} className="aspect-square rounded-xl overflow-hidden shadow-inner bg-slate-200 border border-slate-200 relative group">
-                                    <img src={val} alt={`Ref ${idx}`} className="w-full h-full object-cover" />
-                                    <button 
-                                      onClick={() => {
-                                        setReferenceValue(prev => prev.filter((_, i) => i !== idx));
-                                        setUploadedRefNames(prev => prev.filter((_, i) => i !== idx));
-                                      }}
-                                      className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                                    >
-                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
-                                    </button>
-                                 </div>
-                               ))}
-                            </div>
-                            <div className="flex items-center justify-between">
-                               <span className="text-[10px] font-bold text-slate-500 truncate max-w-[80%]">{uploadedRefNames.join(', ')}</span>
-                               <button onClick={() => {setReferenceValue([]); setUploadedRefNames([]);}} className="text-[10px] font-black text-red-400 uppercase tracking-wider hover:text-red-600">Delete All</button>
-                            </div>
-                          </div>
-                        )}
-                        <input type="file" ref={refImageInput} accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if(f) handleFileRead(f, true); }} />
-                      </div>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
+            </div>
+
+            <div className={`grid grid-cols-1 ${selectedSubject !== 'None' ? 'lg:grid-cols-2' : ''} gap-6 md:gap-10`}>
+              {/* Subject Reference PDF Viewer - Appears when a subject is selected */}
+              {selectedSubject !== 'None' && subjectPreviewContent && (
+                <div className="bg-white rounded-[2rem] md:rounded-[3.5rem] shadow-2xl border border-emerald-100 overflow-hidden flex flex-col animate-in fade-in slide-in-from-left-8 duration-700">
+                  <div className="bg-slate-900 p-6 md:p-8 text-white">
+                    <h3 className="text-xl md:text-2xl font-black flex items-center gap-3">
+                      <span className="w-8 h-8 md:w-10 md:h-10 bg-emerald-500 rounded-xl flex items-center justify-center text-white text-sm md:text-base">01</span>
+                      Subject Reference
+                    </h3>
+                  </div>
+
+                  <div className="p-6 md:p-10 flex-1 flex flex-col gap-6">
+                    <div className="flex-1 flex flex-col bg-emerald-50/30 border-2 border-emerald-100 rounded-[2.5rem] p-5 md:p-8">
+                      <div className="flex items-center justify-between mb-6">
+                        <div className="flex flex-col">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Textbook Context</p>
+                          <span className="text-xs font-black text-emerald-600">{refPdfPage} <span className="text-slate-300 mx-1">/</span> {refPdfTotal}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => setRefPdfPage(p => Math.max(1, p - 1))} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-slate-600 hover:text-emerald-600 transition-all shadow-sm disabled:opacity-30" disabled={refPdfPage <= 1}>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15 19l-7-7 7-7" /></svg>
+                          </button>
+                          <button onClick={() => setRefPdfPage(p => Math.min(refPdfTotal, p + 1))} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-slate-600 hover:text-emerald-600 transition-all shadow-sm disabled:opacity-30" disabled={refPdfPage >= refPdfTotal}>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M9 5l7 7-7 7" /></svg>
+                          </button>
+                          <button onClick={() => shufflePdf(true)} className="p-3 bg-white rounded-xl border-2 border-slate-100 text-emerald-600 hover:bg-emerald-50 transition-all shadow-sm" title="Random Page">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357-2H15" /></svg>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex-1 min-h-[450px] relative rounded-2xl overflow-hidden bg-white border-2 border-emerald-100 shadow-inner">
+                        {(subjectPreviewContent?.includes('application/pdf') || subjectPreviewContent?.split('?')[0].toLowerCase().endsWith('.pdf')) ? (
+                          <PdfPagePreview key={subjectPreviewContent} dataUrl={subjectPreviewContent} pageNumber={refPdfPage} onDocumentLoad={setRefPdfTotal} />
+                        ) : (
+                          <TextPreview dataUrl={subjectPreviewContent || ''} />
+                        )}
+                      </div>
+                      <div className="mt-4 flex items-center justify-between">
+                        <p className="text-[10px] text-emerald-600 font-bold uppercase tracking-tight truncate">Referring: {subjectPreviewFile}</p>
+                        <button 
+                          onClick={() => setSelectedSubject('None')}
+                          className="text-[10px] font-black text-red-400 uppercase tracking-wider hover:text-red-600 transition-colors"
+                        >
+                          Clear Subject
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Submission Panel */}
               <div className="bg-white rounded-[2rem] md:rounded-[3.5rem] shadow-2xl border border-teal-100 overflow-hidden flex flex-col">
@@ -486,7 +521,11 @@ const App: React.FC = () => {
                                </div>
                             </div>
                             <div className="flex-1 min-h-[400px] relative rounded-2xl overflow-hidden bg-white border-2 border-slate-100 shadow-inner">
-                               <PdfPagePreview dataUrl={inputValue[0]} pageNumber={subPdfPage} onDocumentLoad={setSubPdfTotal} />
+                               {(inputValue[0]?.includes('application/pdf') || inputValue[0]?.toLowerCase().endsWith('.pdf')) ? (
+                                 <PdfPagePreview dataUrl={inputValue[0]} pageNumber={subPdfPage} onDocumentLoad={setSubPdfTotal} />
+                               ) : (
+                                 <TextPreview dataUrl={inputValue[0] || ''} />
+                               )}
                             </div>
                             <p className="mt-4 text-[10px] text-slate-400 font-bold uppercase tracking-tight truncate">{uploadedAnswerNames.join(', ')}</p>
                           </div>
@@ -558,7 +597,11 @@ const App: React.FC = () => {
                
                <button
                   onClick={handleValidate}
-                  disabled={isProcessing || !inputValue || (!referenceValue && referenceType !== ReferenceType.AI_TUTOR)}
+                    disabled={
+                      isProcessing || 
+                      inputValue.length === 0 || 
+                      (inputType === InputType.TEXT && !inputValue[0]?.trim())
+                    }
                   className="w-full md:w-auto md:min-w-[280px] h-14 md:h-20 bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-black text-base md:text-xl rounded-2xl md:rounded-3xl shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3"
                 >
                   {isProcessing ? (

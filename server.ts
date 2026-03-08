@@ -1,71 +1,129 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { jsPDF } from "jspdf";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = 3000;
 
-  // API route to get subject content from PDF files
-  app.get("/api/subjects/:subject", (req, res) => {
-    const subject = req.params.subject;
-    
-    const subjectFileMap: Record<string, string> = {
-      'Telugu': 'telugu.pdf',
-      'English': 'english.pdf',
-      'Hindi': 'hindi.pdf',
-      'Maths': 'maths.pdf',
-      'General Knowledge': 'general_knowledge (2).pdf',
-      'Environmental Studies': 'environmental_studies.pdf',
-      'Computer Science': 'computer_science.pdf',
-      'Moral Science': 'moral_science.pdf'
-    };
-
-    const fileName = subjectFileMap[subject];
-    if (!fileName) {
-      return res.status(404).json({ error: "Subject not found" });
-    }
-
-    const filePath = path.join(__dirname, "subjects", fileName);
-    console.log(`Fetching subject: ${subject}, File: ${filePath}`);
-    
-    try {
-      if (fs.existsSync(filePath)) {
-        const content = fs.readFileSync(filePath, "utf-8");
-        console.log(`Content found for ${subject}, length: ${content.length}`);
-        res.json({ content });
-      } else {
-        console.error(`File not found: ${filePath}`);
-        res.status(404).json({ error: "File not found" });
-      }
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Failed to read file" });
-    }
+// 1. Health check - MUST be responsive immediately
+app.get("/api/health", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    env: process.env.NODE_ENV,
+    port: PORT
   });
+});
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
-    });
+// Serve subjects directory statically with a custom handler to ensure valid PDF structure
+const subjectsPath = path.resolve(process.cwd(), "public", "subjects");
+app.get("/subjects/:fileName", (req, res, next) => {
+  const fileName = req.params.fileName;
+  const filePath = path.join(subjectsPath, fileName);
+
+  console.log(`[Subject Request] fileName: ${fileName}, subjectsPath: ${subjectsPath}, fullPath: ${filePath}`);
+
+  if (!fs.existsSync(filePath)) {
+    console.error(`[Subject Error] File not found: ${filePath}`);
+    return res.status(404).send("File not found");
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const isPdf = buffer.length > 4 && buffer.toString("utf-8", 0, 4) === "%PDF";
+
+    console.log(`Serving subject: ${fileName}, isPdf: ${isPdf}, size: ${buffer.length}`);
+
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
+    if (isPdf) {
+      // If it's already a valid PDF, serve it normally using sendFile for better reliability
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      return res.sendFile(filePath);
+    } else {
+      // If it has .pdf extension but is not a PDF, serve it as text/plain
+      // This allows the frontend to handle it as text instead of showing a broken PDF
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      return res.send(buffer);
+    }
+  } catch (err) {
+    console.error("Subject serve error:", err);
+    res.status(500).send("Failed to serve subject file");
+  }
+});
+
+if (fs.existsSync(subjectsPath)) {
+  app.use("/subjects", express.static(subjectsPath));
+}
+
+async function startServer() {
+  const distPath = path.resolve(process.cwd(), "dist");
+  const hasDist = fs.existsSync(distPath);
+  
+  // Determine if we are in production
+  const isProduction = process.env.NODE_ENV === "production" || hasDist;
+
+  if (isProduction) {
+    console.log("Mode: PRODUCTION");
+    if (hasDist) {
+      // Serve static files from the dist directory
+      app.use(express.static(distPath));
+      
+      // Catch-all route for SPA
+      app.get("(.*)", (req, res, next) => {
+        // Skip API and subjects routes
+        if (req.path.startsWith("/api/") || req.path.startsWith("/subjects/")) {
+          return next();
+        }
+        
+        const indexPath = path.join(distPath, "index.html");
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          res.status(404).send("Frontend build index.html not found.");
+        }
+      });
+    } else {
+      console.warn("Production mode detected but 'dist/' folder is missing. Requests to '/' will fail.");
+      app.get("/", (req, res) => {
+        res.status(404).send("Application is running but frontend assets (dist/) are missing. Please run 'npm run build'.");
+      });
+    }
+  } else {
+    console.log("Mode: DEVELOPMENT");
+    try {
+      // Only attempt to load Vite in non-production environments
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.error("Vite failed to load:", e);
+      if (hasDist) {
+        console.log("Falling back to static serving of dist/");
+        app.use(express.static(distPath));
+      }
+    }
+  }
+
+  // Bind port AFTER routes are registered (or at least after initialization starts)
+  app.listen(Number(PORT), "0.0.0.0", () => {
+    console.log(`>>> Server is listening on 0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+// Start the initialization logic
+startServer().catch(err => {
+  console.error("Initialization error:", err);
+});

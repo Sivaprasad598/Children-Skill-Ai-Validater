@@ -17,6 +17,26 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
   const [isSpeaking, setIsSpeaking] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
+  // Audio utility functions
+  const parseDataUrl = (dataUrl: string) => {
+    if (!dataUrl.startsWith('data:')) return dataUrl;
+    const parts = dataUrl.split(',');
+    if (parts.length < 2) return dataUrl;
+    
+    const mimeMatch = parts[0].match(/data:(.*?);base64/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'text/plain';
+    let data = parts[1];
+    
+    if (mimeType === 'text/plain') {
+      try {
+        return atob(data);
+      } catch (e) {
+        return data;
+      }
+    }
+    return dataUrl;
+  };
+
   const chartData = [
     { name: 'Correct', value: report.overallAccuracy },
     { name: 'Incorrect', value: 100 - report.overallAccuracy }
@@ -24,8 +44,10 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
 
   const COLORS = ['#10b981', '#f1f5f9'];
 
-  const displayGrammar = Math.min(10, report.grammarScore);
-  const displayCalligraphy = report.calligraphyScore !== undefined ? Math.min(10, report.calligraphyScore) : undefined;
+  const displayGrammar = Math.round(report.grammarScore / 10);
+  const displayCalligraphy = Math.round(report.calligraphyScore / 10);
+  const displaySubject = Math.round(report.subjectContextScore / 10);
+  const displayStructure = Math.round(report.structureScore / 10);
 
   // Audio utility functions
   function decodeBase64(base64: string) {
@@ -62,15 +84,20 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
     setIsSpeaking(id);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const apiKey = process.env.API_KEY;
+      if (!apiKey) {
+        throw new Error("API_KEY is required for speech synthesis");
+      }
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text: text }] }],
         config: {
+          systemInstruction: "You are a mature, warm, and professional Indian academic tutor. Speak with a calm, grounded, and authoritative yet encouraging tone. Avoid high-pitched or overly energetic American-style inflections. Focus on clarity and warmth.",
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Kore' },
+              prebuiltVoiceConfig: { voiceName: 'Charon' },
             },
           },
         },
@@ -225,24 +252,40 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
           <div className="space-y-6">
             <div className="group">
               <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
-                <span className="text-slate-500">Grammar Score</span>
-                <span className="text-emerald-600 font-black">{displayGrammar}/10</span>
+                <span className="text-slate-500">Subject Context (50%)</span>
+                <span className="text-emerald-600 font-black">{displaySubject}/10</span>
               </div>
               <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
-                <div className="bg-emerald-500 h-full rounded-full transition-all duration-1000" style={{ width: `${displayGrammar * 10}%` }}></div>
+                <div className="bg-emerald-500 h-full rounded-full transition-all duration-1000" style={{ width: `${displaySubject * 10}%` }}></div>
               </div>
             </div>
-            {displayCalligraphy !== undefined && (
-              <div className="group">
-                <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
-                  <span className="text-slate-500">Presentation Quality</span>
-                  <span className="text-teal-600 font-black">{displayCalligraphy}/10</span>
-                </div>
-                <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
-                  <div className="bg-teal-500 h-full rounded-full transition-all duration-1000" style={{ width: `${displayCalligraphy * 10}%` }}></div>
-                </div>
+            <div className="group">
+              <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
+                <span className="text-slate-500">Structure (20%)</span>
+                <span className="text-blue-600 font-black">{displayStructure}/10</span>
               </div>
-            )}
+              <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
+                <div className="bg-blue-500 h-full rounded-full transition-all duration-1000" style={{ width: `${displayStructure * 10}%` }}></div>
+              </div>
+            </div>
+            <div className="group">
+              <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
+                <span className="text-slate-500">Grammar & Spelling (15%)</span>
+                <span className="text-indigo-600 font-black">{displayGrammar}/10</span>
+              </div>
+              <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
+                <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${displayGrammar * 10}%` }}></div>
+              </div>
+            </div>
+            <div className="group">
+              <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
+                <span className="text-slate-500">Calligraphy (15%)</span>
+                <span className="text-teal-600 font-black">{displayCalligraphy}/10</span>
+              </div>
+              <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
+                <div className="bg-teal-500 h-full rounded-full transition-all duration-1000" style={{ width: `${displayCalligraphy * 10}%` }}></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -256,9 +299,14 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                     <p className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase truncate">Validator</p>
                     <p className="text-xs md:text-sm font-bold text-slate-800 truncate">
                       {report.referenceType === ReferenceType.AI_TUTOR && report.subject && report.subject !== 'None' 
-                        ? `AI (${report.subject})` 
+                        ? `Textbook (${report.subject})` 
                         : report.referenceType}
                     </p>
+                    {report.subjectFile && (
+                      <p className="text-[9px] font-bold text-emerald-600 truncate mt-0.5">
+                        File: {report.subjectFile}
+                      </p>
+                    )}
                   </div>
                 </div>
                 {report.rawReferenceData && report.rawReferenceData.length > 0 && (
@@ -267,13 +315,17 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                       <button 
                         key={idx}
                         onClick={() => {
-                          let type: 'IMAGE' | 'TEXT' | 'PDF' = 'TEXT';
-                          if (data.startsWith('data:application/pdf')) type = 'PDF';
-                          else if (data.startsWith('data:image/')) type = 'IMAGE';
-                          // If it's AI Tutor and we have a subject, it's likely the subject doc we fetched
-                          else if (report.referenceType === ReferenceType.AI_TUTOR && report.subject && report.subject !== 'None') {
-                            // Even if it's just text, the user calls it a "pdf doc"
-                            type = 'TEXT'; 
+                          const isPdf = data.startsWith('data:application/pdf') || report.subjectFile?.split('?')[0].toLowerCase().endsWith('.pdf');
+                          const isImage = data.startsWith('data:image/');
+                          
+                          let type: 'IMAGE' | 'TEXT' | 'PDF' = isPdf ? 'PDF' : (isImage ? 'IMAGE' : 'TEXT');
+                          let displayData = data;
+
+                          if (type === 'TEXT') {
+                            displayData = parseDataUrl(data);
+                          } else if (type === 'PDF' && report.subjectFile && report.referenceType === ReferenceType.AI_TUTOR) {
+                            // Use the direct URL for subject PDFs to avoid data URL issues and "re-creation"
+                            displayData = `/subjects/${report.subjectFile}`;
                           }
 
                           setModalPdfPage(1);
@@ -281,7 +333,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                             title: report.referenceType === ReferenceType.AI_TUTOR && report.subject && report.subject !== 'None'
                               ? `${report.subject} Reference`
                               : `Validator Source ${idx + 1}`, 
-                            data, 
+                            data: displayData, 
                             type 
                           });
                         }}
@@ -290,9 +342,20 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                         {data.startsWith('data:image/') ? (
                           <img src={data} alt="Ref" className="w-full h-full object-cover" />
                         ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center text-[8px] font-black text-emerald-600 leading-none">
-                            {data.startsWith('data:application/pdf') ? 'PDF' : (
-                              report.referenceType === ReferenceType.AI_TUTOR ? 'DOC' : 'TXT'
+                          <div className="w-full h-full flex flex-col items-center justify-center bg-emerald-50/50">
+                            {(data.startsWith('data:application/pdf') || (report.subjectFile?.split('?')[0].toLowerCase().endsWith('.pdf') && report.referenceType === ReferenceType.AI_TUTOR)) ? (
+                              <>
+                                <svg className="w-4 h-4 text-emerald-600 mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                </svg>
+                                <span className="text-[7px] font-black text-emerald-700 uppercase">PDF</span>
+                              </>
+                            ) : (
+                              <div className="flex flex-col items-center">
+                                <span className="text-[8px] font-black text-emerald-600 uppercase">
+                                  {report.referenceType === ReferenceType.AI_TUTOR ? 'DOC' : 'TXT'}
+                                </span>
+                              </div>
                             )}
                           </div>
                         )}
@@ -314,17 +377,30 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                       <button 
                         key={idx}
                         onClick={() => {
-                          const type = data.startsWith('data:application/pdf') ? 'PDF' : (data.startsWith('data:image/') ? 'IMAGE' : 'TEXT');
+                          const isPdf = data.startsWith('data:application/pdf');
+                          const isImage = data.startsWith('data:image/');
+                          const type = isPdf ? 'PDF' : (isImage ? 'IMAGE' : 'TEXT');
+                          const displayData = type === 'TEXT' ? parseDataUrl(data) : data;
+
                           setModalPdfPage(1);
-                          setModalContent({ title: `Submission ${idx + 1}`, data, type });
+                          setModalContent({ title: `Submission ${idx + 1}`, data: displayData, type });
                         }}
                         className="w-10 h-10 bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm hover:border-teal-500 transition-all"
                       >
                         {data.startsWith('data:image/') ? (
                           <img src={data} alt="Sub" className="w-full h-full object-cover" />
                         ) : (
-                          <div className="w-full h-full flex items-center justify-center text-[8px] font-black text-teal-600">
-                            {data.startsWith('data:application/pdf') ? 'PDF' : 'TXT'}
+                          <div className="w-full h-full flex flex-col items-center justify-center bg-teal-50/50">
+                            {data.startsWith('data:application/pdf') ? (
+                              <>
+                                <svg className="w-4 h-4 text-teal-600 mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                </svg>
+                                <span className="text-[7px] font-black text-teal-700 uppercase">PDF</span>
+                              </>
+                            ) : (
+                              <span className="text-[8px] font-black text-teal-600 uppercase">TXT</span>
+                            )}
                           </div>
                         )}
                       </button>
@@ -335,6 +411,26 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
           </div>
         </div>
       </div>
+
+      {/* Reference Context Summary */}
+      {report.referenceText && (
+        <div className="bg-emerald-50/30 border border-emerald-100 p-8 md:p-10 rounded-[2rem] md:rounded-[3rem] shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+              </svg>
+            </div>
+            <h3 className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">Reference Context Summary</h3>
+          </div>
+          <p className="text-slate-600 text-xs md:text-sm leading-relaxed font-medium italic">
+            "{report.referenceText}"
+          </p>
+          <p className="text-[8px] font-bold text-emerald-500 uppercase mt-4 tracking-tighter">
+            * This summary represents the relevant facts identified by BrainGauge AI from the source material.
+          </p>
+        </div>
+      )}
 
       {/* NEW: Contradictory Statements Block with Merged TTS Analysis */}
       {report.incorrectStatements && report.incorrectStatements.length > 0 && (
@@ -509,8 +605,12 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                   <img src={modalContent.data} alt="View" className="max-w-full h-auto rounded-xl shadow-xl border-4 border-white bg-white" />
                 </div>
               ) : modalContent.type === 'PDF' ? (
-                <div className="w-full h-[60vh] md:h-[75vh] max-w-3xl rounded-xl overflow-hidden shadow-2xl bg-white border-2 border-slate-200">
-                   <PdfPagePreview dataUrl={modalContent.data} pageNumber={modalPdfPage} onDocumentLoad={setModalPdfTotal} />
+                <div className="w-full h-[60vh] md:h-[75vh] max-w-4xl rounded-xl overflow-hidden shadow-2xl bg-white border-2 border-slate-200">
+                   {modalContent.data.startsWith('data:') ? (
+                     <PdfPagePreview dataUrl={modalContent.data} pageNumber={modalPdfPage} onDocumentLoad={setModalPdfTotal} />
+                   ) : (
+                     <iframe src={modalContent.data} className="w-full h-full border-none" title="PDF Viewer" />
+                   )}
                 </div>
               ) : (
                 <div className="w-full bg-white p-6 md:p-10 rounded-2xl border border-slate-100 text-slate-700 font-mono text-sm md:text-base whitespace-pre-wrap leading-relaxed shadow-sm max-w-4xl">

@@ -7,15 +7,19 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
+    "start": "node server.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^1.41.0",
+    "@tailwindcss/vite": "^4.2.0",
     "express": "^5.2.1",
+    "jspdf": "^4.2.0",
     "pdfjs-dist": "4.10.38",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "recharts": "^3.7.0",
+    "tailwindcss": "^4.2.0",
     "tsx": "^4.21.0"
   },
   "devDependencies": {
