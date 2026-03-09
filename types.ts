@@ -67,6 +67,8 @@ export interface ValidationReport {
   insights: string[];
   extractedText: string;
   referenceText?: string;
+  audioData?: string; // Base64 audio data
+  audioTranscript?: string; // Text transcript of the audio summary
   subject?: string;
   subjectFile?: string;
   rawInputData?: string[]; // Array of Base64 or Text

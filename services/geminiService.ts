@@ -1,6 +1,6 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
-import { InputType, ReferenceType, ValidationReport } from "../types";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { InputType, ReferenceType, ValidationReport, Mistake, IncorrectStatement } from "../types";
 
 let aiInstance: GoogleGenAI | null = null;
 
@@ -38,6 +38,32 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } {
   }
   
   return { mimeType, data };
+}
+
+/**
+ * Generates audio from text using Gemini TTS
+ */
+async function generateAudio(text: string): Promise<string | undefined> {
+  try {
+    const ai = getAI();
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: 'Kore' },
+          },
+        },
+      },
+    });
+
+    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  } catch (error) {
+    console.error("TTS Error:", error);
+    return undefined;
+  }
 }
 
 export async function generateAnalysis(params: {
@@ -91,12 +117,16 @@ export async function generateAnalysis(params: {
          * Extract key concepts from the student's answer.
          * Calculate semantic similarity (do not just look for exact words).
          * Accept paraphrased answers that convey the same meaning.
-       - Rule 2: Concept Coverage
-         * 90–100% key points covered: Full marks (50/50 - 100% score for this pillar)
-         * 70–89% key points covered: High marks (35-44/50)
-         * 40–69% key points covered: Partial marks (20-34/50)
-         * <40% key points covered: Low marks (0-19/50)
-         * Identify missing key concepts and extra irrelevant content.
+       - Rule 2: Concept Coverage & Missing Content (CRITICAL)
+         * Identify specific sections, facts, or concepts present in the PDF that are missing from the student's answer.
+         * List these missing parts clearly in the 'subjectMistakes' field.
+         * IMPORTANT: Mention the missing parts EXACTLY as they appear in the Reference PDF (using the PDF's original language), rather than translating them into ${language}.
+         * Scoring for this pillar:
+           - 100% key points covered: 50/50
+           - 80-99% key points covered: 40-49/50
+           - 60-79% key points covered: 30-39/50
+           - 40-59% key points covered: 20-29/50
+           - <40% key points covered: 0-19/50
          * Penalize off-topic writing.
        - Rule 3: Fact Accuracy
          * Check for incorrect statements or contradictions with the subject material.
@@ -113,11 +143,12 @@ export async function generateAnalysis(params: {
 
     3. GRAMMAR & SPELLING VALIDATION (15% of total score)
        - Grammar Checks: Sentence formation, Subject-verb agreement, Tense consistency, Punctuation.
-       - Spelling Checks:
-         * 0-2 mistakes: 0% deduction (15/15)
-         * 3-5 mistakes: -5% deduction (10/15)
-         * 6-10 mistakes: -10% deduction (5/15)
-         * >10 mistakes: -15% deduction (0/15)
+       - Spelling Checks (STRICT):
+         * 0 mistakes: 100% (15/15)
+         * 1-2 mistakes: 70% (10/15)
+         * 3-5 mistakes: 40% (6/15)
+         * >5 mistakes: 0% (0/15)
+       - Deduct marks proportionally for grammar errors. If there are ANY spelling or grammar mistakes, the score MUST be less than 100.
 
     4. CALLIGRAPHY / HANDWRITING VALIDATION (15% of total score)
        - ONLY applicable if the input is an IMAGE of a handwritten answer.
@@ -137,8 +168,10 @@ export async function generateAnalysis(params: {
     THINKING PROCESS:
     1. First, extract the literal text from the submission (OCR for images/PDFs).
     2. Analyze the EXTRACTED TEXT for Subject Context (Pillar 1), Structure (Pillar 2), and Grammar (Pillar 3).
-    3. Separately, if the input is an image, analyze the VISUAL quality for Calligraphy (Pillar 4).
-    4. Ensure Pillar 1 score is based solely on the text found in step 1, not the visual artifacts from step 3.
+    3. Count EVERY spelling and grammar mistake. Do not ignore minor ones. If any exist, the Grammar score MUST be below 100.
+    4. Compare the extracted text with the Reference PDF to identify specific missing facts or concepts.
+    5. Separately, if the input is an image, analyze the VISUAL quality for Calligraphy (Pillar 4).
+    6. Ensure Pillar 1 score is based solely on the text found in step 1, not the visual artifacts from step 5.
 
     OUTPUT REQUIREMENTS:
     - All text in the report must be in ${language}.
@@ -236,7 +269,7 @@ export async function generateAnalysis(params: {
                 required: ["statement", "correction", "reason"]
               }
             },
-            subjectMistakes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of missing key concepts or irrelevant content." },
+            subjectMistakes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of specific missing key concepts, facts, or sections from the reference PDF, and any irrelevant content found." },
             insights: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific feedback on structure and handwriting." },
             extractedText: { type: Type.STRING },
             referenceText: { type: Type.STRING }
@@ -247,6 +280,58 @@ export async function generateAnalysis(params: {
     });
 
     const reportData = JSON.parse(response.text);
+    
+    // Manual enforcement of strict scoring rules
+    const numSpelling = reportData.spellingMistakes?.length || 0;
+    const numGrammar = reportData.grammarMistakes?.length || 0;
+    const totalMistakes = numSpelling + numGrammar;
+
+    if (totalMistakes > 0) {
+      // Apply strict spelling/grammar scoring if the model was too lenient
+      let enforcedGrammarScore = 100;
+      if (numSpelling > 0) {
+        if (numSpelling <= 2) enforcedGrammarScore = 70;
+        else if (numSpelling <= 5) enforcedGrammarScore = 40;
+        else enforcedGrammarScore = 0;
+      }
+      
+      // Grammar mistakes also reduce the score
+      if (numGrammar > 0) {
+        enforcedGrammarScore = Math.min(enforcedGrammarScore, 80); // Cap at 80 if grammar mistakes exist
+        enforcedGrammarScore -= (numGrammar * 10); // Deduct 10 per grammar mistake
+      }
+
+      reportData.grammarScore = Math.max(0, Math.min(reportData.grammarScore, enforcedGrammarScore));
+      
+      // Re-calculate overall accuracy based on weights
+      // Weighting: Subject Context(50%), Structure(20%), Grammar(15%), Calligraphy(15%)
+      const sScore = reportData.subjectContextScore || 0;
+      const stScore = reportData.structureScore || 0;
+      const gScore = reportData.grammarScore || 0;
+      const cScore = reportData.calligraphyScore || 100;
+      
+      reportData.overallAccuracy = (sScore * 0.5) + (stScore * 0.2) + (gScore * 0.15) + (cScore * 0.15);
+    }
+
+    // Generate audio summary of corrections
+    let audioData: string | undefined = undefined;
+    const correctionsText = [
+      `Validation Report for ${subject || 'Submission'}.`,
+      `Overall Accuracy: ${Math.round(reportData.overallAccuracy || 0)}%.`,
+      reportData.spellingMistakes?.length > 0 ? `Spelling Mistakes: ${reportData.spellingMistakes.map((m: any) => `${m.incorrect} should be ${m.correct}`).join(', ')}.` : '',
+      reportData.grammarMistakes?.length > 0 ? `Grammar Mistakes: ${reportData.grammarMistakes.map((m: any) => `${m.incorrect} should be ${m.correct}. ${m.explanation || ''}`).join(' ')}.` : '',
+      reportData.incorrectStatements?.length > 0 ? `Incorrect Statements: ${reportData.incorrectStatements.map((s: any) => `${s.statement}. Correction: ${s.correction}. Reason: ${s.reason}`).join(' ')}.` : '',
+      reportData.subjectMistakes?.length > 0 ? `Subject Mistakes: ${reportData.subjectMistakes.join('. ')}.` : '',
+      reportData.insights?.length > 0 ? `Insights: ${reportData.insights.join('. ')}.` : ''
+    ].filter(Boolean).join(' ');
+
+    try {
+      if (correctionsText.length > 50) {
+        audioData = await generateAudio(`Please read these corrections in ${language}: ${correctionsText}`);
+      }
+    } catch (audioErr) {
+      console.error("Failed to generate audio summary:", audioErr);
+    }
     
     return {
       ...reportData,
@@ -261,6 +346,8 @@ export async function generateAnalysis(params: {
       referenceType,
       language,
       subject,
+      audioData,
+      audioTranscript: correctionsText,
       rawInputData: answerContent,
       rawReferenceData: referenceContent
     };

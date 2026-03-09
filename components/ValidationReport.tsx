@@ -15,7 +15,9 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
   const [modalPdfPage, setModalPdfPage] = useState(1);
   const [modalPdfTotal, setModalPdfTotal] = useState(1);
   const [isSpeaking, setIsSpeaking] = useState<string | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   // Audio utility functions
   const parseDataUrl = (dataUrl: string) => {
@@ -80,8 +82,20 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
   }
 
   const handleSpeech = async (text: string, id: string) => {
-    if (isSpeaking) return;
+    if (isSpeaking) {
+      if (isSpeaking === id) {
+        // Stop if clicking same button
+        if (audioSourceRef.current) {
+          audioSourceRef.current.stop();
+          audioSourceRef.current = null;
+        }
+        setIsSpeaking(null);
+        setIsPaused(false);
+      }
+      return;
+    }
     setIsSpeaking(id);
+    setIsPaused(false);
 
     try {
       const apiKey = process.env.API_KEY;
@@ -109,17 +123,74 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
           audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         }
         const ctx = audioContextRef.current;
+        if (ctx.state === 'suspended') await ctx.resume();
+        
         const audioBuffer = await decodeAudioData(decodeBase64(base64Audio), ctx, 24000, 1);
         const source = ctx.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(ctx.destination);
-        source.onended = () => setIsSpeaking(null);
+        source.onended = () => {
+          setIsSpeaking(null);
+          setIsPaused(false);
+          audioSourceRef.current = null;
+        };
+        audioSourceRef.current = source;
         source.start();
       } else {
         setIsSpeaking(null);
       }
     } catch (error) {
       console.error("TTS Error:", error);
+      setIsSpeaking(null);
+    }
+  };
+
+  const togglePause = async () => {
+    if (!audioContextRef.current || !isSpeaking) return;
+    const ctx = audioContextRef.current;
+    
+    if (ctx.state === 'running') {
+      await ctx.suspend();
+      setIsPaused(true);
+    } else if (ctx.state === 'suspended') {
+      await ctx.resume();
+      setIsPaused(false);
+    }
+  };
+
+  const playReportAudio = async () => {
+    if (isSpeaking === 'report-audio') {
+      // If already playing, toggle pause
+      togglePause();
+      return;
+    }
+    
+    if (isSpeaking) return; // Don't interrupt other speech
+    
+    if (!report.audioData) return;
+    setIsSpeaking('report-audio');
+    setIsPaused(false);
+
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      }
+      const ctx = audioContextRef.current;
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      const audioBuffer = await decodeAudioData(decodeBase64(report.audioData), ctx, 24000, 1);
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      source.onended = () => {
+        setIsSpeaking(null);
+        setIsPaused(false);
+        audioSourceRef.current = null;
+      };
+      audioSourceRef.current = source;
+      source.start();
+    } catch (error) {
+      console.error("Play Audio Error:", error);
       setIsSpeaking(null);
     }
   };
@@ -240,7 +311,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-              <span className="text-4xl md:text-5xl font-black text-emerald-600">{report.overallAccuracy}%</span>
+              <span className="text-2xl md:text-3xl font-black text-emerald-600">{report.overallAccuracy}%</span>
               <span className="text-[8px] md:text-[10px] font-black text-slate-300 uppercase mt-1">Precision Rate</span>
             </div>
           </div>
@@ -490,10 +561,63 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
         {/* Detailed Error Log */}
         <div className="bg-white p-8 md:p-12 rounded-[2rem] md:rounded-[3.5rem] shadow-xl border border-emerald-50">
-          <h3 className="text-xl md:text-2xl font-black text-slate-800 mb-6 flex items-center gap-3">
-            <span className="w-8 h-8 md:w-10 md:h-10 bg-red-50 text-red-500 rounded-xl flex items-center justify-center">!</span>
-            Detailed Corrections
-          </h3>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-xl md:text-2xl font-black text-slate-800 flex items-center gap-3">
+              <span className="w-8 h-8 md:w-10 md:h-10 bg-red-50 text-red-500 rounded-xl flex items-center justify-center">!</span>
+              Detailed Corrections
+            </h3>
+            {report.audioData && (
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={playReportAudio}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all shadow-sm border ${isSpeaking === 'report-audio' ? 'bg-emerald-600 text-white border-emerald-600 scale-105' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white hover:border-emerald-600'}`}
+                >
+                  <svg className={`w-4 h-4 ${isSpeaking === 'report-audio' && !isPaused ? 'animate-pulse' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {isSpeaking === 'report-audio' && !isPaused ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M10 9v6m4-6v6" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    )}
+                  </svg>
+                  <span className="text-[10px] font-black uppercase tracking-widest">
+                    {isSpeaking === 'report-audio' ? (isPaused ? 'Paused' : 'Playing Summary...') : 'Play Audio Summary'}
+                  </span>
+                </button>
+                {isSpeaking === 'report-audio' && (
+                  <button 
+                    onClick={() => {
+                      if (audioSourceRef.current) {
+                        audioSourceRef.current.stop();
+                        audioSourceRef.current = null;
+                      }
+                      setIsSpeaking(null);
+                      setIsPaused(false);
+                    }}
+                    className="p-2 bg-red-50 text-red-500 rounded-xl border border-red-100 hover:bg-red-500 hover:text-white transition-all shadow-sm"
+                    title="Stop Audio"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {report.audioTranscript && (
+            <div className="mb-8 p-6 bg-slate-50 rounded-2xl border border-slate-100 animate-in fade-in slide-in-from-top-2 duration-500">
+              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Audio Summary Transcript
+              </h4>
+              <p className="text-xs md:text-sm text-slate-600 leading-relaxed font-medium italic">
+                {report.audioTranscript}
+              </p>
+            </div>
+          )}
 
           <div className="space-y-6">
             {report.spellingMistakes.length > 0 && (
