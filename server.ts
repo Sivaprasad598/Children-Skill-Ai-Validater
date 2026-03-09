@@ -7,8 +7,10 @@ import { jsPDF } from "jspdf";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+console.log(">>> Script starting...");
+
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // 1. Health check - MUST be responsive immediately
 app.get("/api/health", (req, res) => {
@@ -18,6 +20,11 @@ app.get("/api/health", (req, res) => {
     env: process.env.NODE_ENV,
     port: PORT
   });
+});
+
+// Start listening immediately to satisfy Cloud Run health checks
+app.listen(Number(PORT), "0.0.0.0", () => {
+  console.log(`>>> Server is listening on 0.0.0.0:${PORT}`);
 });
 
 // Serve subjects directory statically with a custom handler to ensure valid PDF structure
@@ -79,7 +86,7 @@ async function startServer() {
       app.use(express.static(distPath));
       
       // Catch-all route for SPA
-      app.get("(.*)", (req, res, next) => {
+      app.get("*", (req, res, next) => {
         // Skip API and subjects routes
         if (req.path.startsWith("/api/") || req.path.startsWith("/subjects/")) {
           return next();
@@ -116,11 +123,6 @@ async function startServer() {
       }
     }
   }
-
-  // Bind port AFTER routes are registered (or at least after initialization starts)
-  app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`>>> Server is listening on 0.0.0.0:${PORT}`);
-  });
 }
 
 // Start the initialization logic
