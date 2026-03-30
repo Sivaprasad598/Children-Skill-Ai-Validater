@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { User } from '../types';
+import { User, ValidatorType } from '../types';
 import { storageService } from '../services/storageService';
 
 interface AuthProps {
@@ -16,6 +16,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
       profilePicture: `https://picsum.photos/seed/${Math.random()}/200`,
       loginType: 'guest',
       preferredLanguage: 'English',
+      validatorType: ValidatorType.CONCEPTUAL,
       createdDate: new Date().toISOString()
     };
     storageService.setUser(guestUser);
@@ -30,6 +31,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
       profilePicture: 'https://picsum.photos/seed/alex/200',
       loginType: 'google',
       preferredLanguage: 'English',
+      validatorType: ValidatorType.CONCEPTUAL,
       createdDate: new Date().toISOString()
     };
     storageService.setUser(googleUser);

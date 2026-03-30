@@ -11,7 +11,7 @@ interface ReportProps {
 }
 
 const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
-  const [modalContent, setModalContent] = useState<{ title: string; data: string; type: 'IMAGE' | 'TEXT' | 'PDF' } | null>(null);
+  const [modalContent, setModalContent] = useState<{ title: string; data: string; type: 'IMAGE' | 'TEXT' | 'PDF' | 'AUDIO' } | null>(null);
   const [modalPdfPage, setModalPdfPage] = useState(1);
   const [modalPdfTotal, setModalPdfTotal] = useState(1);
   const [isSpeaking, setIsSpeaking] = useState<string | null>(null);
@@ -235,12 +235,14 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
 
     if (!data) return;
 
-    let viewType: 'IMAGE' | 'TEXT' | 'PDF' = 'TEXT';
+    let viewType: 'IMAGE' | 'TEXT' | 'PDF' | 'AUDIO' = 'TEXT';
     
     if (data.startsWith('data:image/')) viewType = 'IMAGE';
     else if (data.startsWith('data:application/pdf')) viewType = 'PDF';
+    else if (data.startsWith('data:audio/')) viewType = 'AUDIO';
     else if (type === ReferenceType.IMAGE || type === InputType.IMAGE) viewType = 'IMAGE';
     else if (type === ReferenceType.PDF || type === InputType.PDF) viewType = 'PDF';
+    else if (type === InputType.AUDIO) viewType = 'AUDIO';
 
     setModalPdfPage(1);
     setModalContent({
@@ -276,9 +278,11 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
         <div className="bg-slate-900 p-6 md:p-8 text-white flex items-center justify-between">
           <h3 className="text-lg md:text-xl font-black flex items-center gap-3">
             <span className="w-8 h-8 bg-emerald-500 text-white rounded-lg flex items-center justify-center text-sm">!</span>
-            Annotated Submission
+            {report.inputType === InputType.AUDIO ? 'Transcribed Voice Submission' : 'Annotated Submission'}
           </h3>
-          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Errors Highlighted in Red</span>
+          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">
+            {report.inputType === InputType.AUDIO ? 'AI Formatted Transcription' : 'Errors Highlighted in Red'}
+          </span>
         </div>
         <div className="p-8 md:p-12 bg-slate-50/50">
           <div className="bg-white p-8 md:p-12 rounded-[1.5rem] md:rounded-[2.5rem] border border-slate-100 shadow-sm text-lg md:text-xl leading-relaxed text-slate-700 font-medium whitespace-pre-wrap">
@@ -323,7 +327,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
           <div className="space-y-6">
             <div className="group">
               <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
-                <span className="text-slate-500">Subject Context (50%)</span>
+                <span className="text-slate-500">Subject Context (80%)</span>
                 <span className="text-emerald-600 font-black">{displaySubject}/10</span>
               </div>
               <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
@@ -332,7 +336,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
             </div>
             <div className="group">
               <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
-                <span className="text-slate-500">Structure (20%)</span>
+                <span className="text-slate-500">Structure (10%)</span>
                 <span className="text-blue-600 font-black">{displayStructure}/10</span>
               </div>
               <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
@@ -341,7 +345,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
             </div>
             <div className="group">
               <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
-                <span className="text-slate-500">Grammar & Spelling (15%)</span>
+                <span className="text-slate-500">Grammar & Spelling (5%)</span>
                 <span className="text-indigo-600 font-black">{displayGrammar}/10</span>
               </div>
               <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
@@ -350,7 +354,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
             </div>
             <div className="group">
               <div className="flex justify-between text-[10px] font-black uppercase tracking-wider mb-2">
-                <span className="text-slate-500">Calligraphy (15%)</span>
+                <span className="text-slate-500">Calligraphy (5%)</span>
                 <span className="text-teal-600 font-black">{displayCalligraphy}/10</span>
               </div>
               <div className="w-full bg-slate-100 h-3 md:h-4 rounded-full overflow-hidden p-0.5 md:p-1">
@@ -450,7 +454,8 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                         onClick={() => {
                           const isPdf = data.startsWith('data:application/pdf');
                           const isImage = data.startsWith('data:image/');
-                          const type = isPdf ? 'PDF' : (isImage ? 'IMAGE' : 'TEXT');
+                          const isAudio = data.startsWith('data:audio/');
+                          const type = isPdf ? 'PDF' : (isImage ? 'IMAGE' : (isAudio ? 'AUDIO' : 'TEXT'));
                           const displayData = type === 'TEXT' ? parseDataUrl(data) : data;
 
                           setModalPdfPage(1);
@@ -468,6 +473,13 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
                                 </svg>
                                 <span className="text-[7px] font-black text-teal-700 uppercase">PDF</span>
+                              </>
+                            ) : data.startsWith('data:audio/') ? (
+                              <>
+                                <svg className="w-4 h-4 text-teal-600 mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                                </svg>
+                                <span className="text-[7px] font-black text-teal-700 uppercase">AUDIO</span>
                               </>
                             ) : (
                               <span className="text-[8px] font-black text-teal-600 uppercase">TXT</span>
@@ -735,6 +747,27 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                    ) : (
                      <iframe src={modalContent.data} className="w-full h-full border-none" title="PDF Viewer" />
                    )}
+                </div>
+              ) : modalContent.type === 'AUDIO' ? (
+                <div className="w-full max-w-2xl bg-white p-6 md:p-10 rounded-3xl border border-slate-100 shadow-xl flex flex-col items-center gap-6 overflow-auto">
+                  <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center flex-shrink-0">
+                    <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                  </div>
+                  <audio src={modalContent.data} controls className="w-full" />
+                  
+                  <div className="w-full space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Transcribed Text</span>
+                      <div className="h-px bg-slate-100 flex-1"></div>
+                    </div>
+                    <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 text-slate-700 font-medium leading-relaxed italic text-sm md:text-base whitespace-pre-wrap">
+                      {report.extractedText ? `"${report.extractedText}"` : "No transcription available."}
+                    </div>
+                  </div>
+                  
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Recorded Submission</p>
                 </div>
               ) : (
                 <div className="w-full bg-white p-6 md:p-10 rounded-2xl border border-slate-100 text-slate-700 font-mono text-sm md:text-base whitespace-pre-wrap leading-relaxed shadow-sm max-w-4xl">

@@ -5,9 +5,10 @@ import { ValidationHistoryItem } from '../types';
 interface HistoryProps {
   history: ValidationHistoryItem[];
   onSelectItem: (item: ValidationHistoryItem) => void;
+  onClearHistory: () => void;
 }
 
-const History: React.FC<HistoryProps> = ({ history, onSelectItem }) => {
+const History: React.FC<HistoryProps> = ({ history, onSelectItem, onClearHistory }) => {
   const [filter, setFilter] = useState('');
 
   const filteredHistory = history.filter(item => 
@@ -19,18 +20,46 @@ const History: React.FC<HistoryProps> = ({ history, onSelectItem }) => {
   return (
     <div className="space-y-6 md:space-y-8 animate-in fade-in duration-500 pb-10">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 px-2">
-        <h2 className="text-3xl md:text-4xl font-black text-slate-800 tracking-tight">Report History</h2>
-        <div className="relative group w-full md:w-96">
-          <input 
-            type="text" 
-            placeholder="Search reports..." 
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="pl-12 pr-6 py-3.5 md:py-4 bg-white border-2 border-slate-100 rounded-[1.25rem] md:rounded-[1.5rem] focus:border-emerald-500 outline-none w-full font-bold text-slate-700 text-sm md:text-base transition-all shadow-sm"
-          />
-          <svg className="h-6 w-6 absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
-          </svg>
+        <div className="flex items-center justify-between w-full md:w-auto">
+          <h2 className="text-3xl md:text-4xl font-black text-slate-800 tracking-tight">Report History</h2>
+          {history.length > 0 && (
+            <button 
+              onClick={() => {
+                if (window.confirm('Are you sure you want to clear all history?')) {
+                  onClearHistory();
+                }
+              }}
+              className="md:hidden px-4 py-2 bg-red-50 text-red-500 text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-red-500 hover:text-white transition-all"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
+          <div className="relative group w-full md:w-80 lg:w-96">
+            <input 
+              type="text" 
+              placeholder="Search reports..." 
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="pl-12 pr-6 py-3.5 md:py-4 bg-white border-2 border-slate-100 rounded-[1.25rem] md:rounded-[1.5rem] focus:border-emerald-500 outline-none w-full font-bold text-slate-700 text-sm md:text-base transition-all shadow-sm"
+            />
+            <svg className="h-6 w-6 absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
+            </svg>
+          </div>
+          {history.length > 0 && (
+            <button 
+              onClick={() => {
+                if (window.confirm('Are you sure you want to clear all history?')) {
+                  onClearHistory();
+                }
+              }}
+              className="hidden md:block px-6 py-4 bg-red-50 text-red-500 text-xs font-black uppercase tracking-widest rounded-[1.5rem] hover:bg-red-500 hover:text-white transition-all shadow-sm whitespace-nowrap"
+            >
+              Clear History
+            </button>
+          )}
         </div>
       </div>
 

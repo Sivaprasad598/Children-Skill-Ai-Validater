@@ -23,3 +23,8 @@ export const SUBJECTS = [
   'Computer Science',
   'Moral Science'
 ];
+
+export const VALIDATOR_TYPES = [
+  { id: 'EXACT_MATCH', name: 'Exact Match Validation', description: 'Direct comparison with key wording and structure.' },
+  { id: 'CONCEPTUAL', name: 'Conceptual Validation', description: 'Evaluates overall understanding and core ideas.' }
+];

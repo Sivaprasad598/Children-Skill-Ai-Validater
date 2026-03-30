@@ -3,6 +3,7 @@ export enum InputType {
   TEXT = 'TEXT',
   PDF = 'PDF',
   IMAGE = 'IMAGE',
+  AUDIO = 'AUDIO',
   AI = 'AI'
 }
 
@@ -11,6 +12,11 @@ export enum ReferenceType {
   TEXT = 'TEXT',
   PDF = 'PDF',
   IMAGE = 'IMAGE'
+}
+
+export enum ValidatorType {
+  EXACT_MATCH = 'EXACT_MATCH',
+  CONCEPTUAL = 'CONCEPTUAL'
 }
 
 export enum Subject {
@@ -34,6 +40,7 @@ export interface User {
   profilePicture: string;
   loginType: 'google' | 'guest';
   preferredLanguage: string;
+  validatorType: ValidatorType;
   createdDate: string;
 }
 
@@ -54,6 +61,7 @@ export interface ValidationReport {
   timestamp: string;
   inputType: InputType;
   referenceType: ReferenceType;
+  validatorType: ValidatorType;
   language: string;
   overallAccuracy: number;
   subjectContextScore: number;

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, InputType, ReferenceType, ValidationReport, ValidationHistoryItem } from './types';
-import { LANGUAGES, SUBJECTS } from './constants';
+import { User, InputType, ReferenceType, ValidationReport, ValidationHistoryItem, ValidatorType } from './types';
+import { LANGUAGES, SUBJECTS, VALIDATOR_TYPES } from './constants';
 import { storageService } from './services/storageService';
-import { generateAnalysis } from './services/geminiService';
+import { generateAnalysis, transcribeAudio } from './services/geminiService';
 import Header from './components/Header';
 import Auth from './components/Auth';
 import ValidationReportView from './components/ValidationReport';
@@ -144,6 +144,118 @@ export const PdfPagePreview: React.FC<{ dataUrl: string; pageNumber: number; onD
   );
 };
 
+// Specialized Audio Recorder component
+const VoiceRecorder: React.FC<{ onRecordingComplete: (dataUrl: string, fileName: string) => void }> = ({ onRecordingComplete }) => {
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  const startRecording = async () => {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      chunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const dataUrl = reader.result as string;
+          onRecordingComplete(dataUrl, `Voice_Input_${new Date().getTime()}.webm`);
+        };
+        reader.readAsDataURL(blob);
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => {
+          if (prev >= 89) {
+            stopRecording();
+            return 90;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch (err: any) {
+      console.error("Failed to start recording:", err);
+      setError(err.name === 'NotAllowedError' ? "Microphone access denied. Please check your browser settings." : "Failed to access microphone.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center gap-6 p-10 bg-slate-50 border-2 border-slate-100 border-dashed rounded-[2rem] hover:bg-teal-50 hover:border-teal-200 transition-all shadow-sm">
+      <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-500 ${isRecording ? 'bg-red-500 animate-pulse scale-110 shadow-lg shadow-red-200' : 'bg-teal-500 shadow-lg shadow-teal-100'}`}>
+        <button 
+          onClick={isRecording ? stopRecording : startRecording}
+          className="w-full h-full flex items-center justify-center text-white"
+        >
+          {isRecording ? (
+            <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+          ) : (
+            <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+              <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+            </svg>
+          )}
+        </button>
+      </div>
+      
+      <div className="text-center">
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 text-red-600 text-xs font-bold rounded-xl border border-red-100 animate-in fade-in slide-in-from-top-2 duration-300">
+            {error}
+          </div>
+        )}
+        <p className={`text-lg font-black tracking-widest uppercase ${isRecording ? 'text-red-600' : 'text-slate-800'}`}>
+          {isRecording ? 'Recording...' : 'Voice Submission'}
+        </p>
+        <p className="text-2xl font-mono font-black text-slate-600 mt-1">
+          {formatTime(recordingTime)}
+          <span className="text-xs text-slate-400 ml-1">/ 1:30</span>
+        </p>
+        {recordingTime > 75 && isRecording && (
+          <p className="text-[10px] text-red-500 font-black animate-pulse mt-1">Approaching 1.5m limit!</p>
+        )}
+        <p className="text-[10px] text-slate-400 font-bold mt-2 uppercase tracking-widest">
+          {isRecording ? 'Tap to Stop' : 'Tap to Start Speaking'}
+        </p>
+      </div>
+    </div>
+  );
+};
+
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<'validate' | 'history' | 'profile'>('validate');
@@ -152,6 +264,8 @@ const App: React.FC = () => {
   const [inputType, setInputType] = useState<InputType>(InputType.TEXT);
   const [inputValue, setInputValue] = useState<string[]>([]);
   const [uploadedAnswerNames, setUploadedAnswerNames] = useState<string[]>([]);
+  const [transcribedText, setTranscribedText] = useState<string | null>(null);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   
   // Reference State
   const [referenceType, setReferenceType] = useState<ReferenceType>(ReferenceType.AI_TUTOR);
@@ -308,6 +422,7 @@ const App: React.FC = () => {
       const report = await generateAnalysis({
         inputType,
         referenceType: finalReferenceType,
+        validatorType: user.validatorType,
         language: outputLanguage,
         answerContent: inputValue,
         referenceContent: finalReferenceContent,
@@ -316,6 +431,7 @@ const App: React.FC = () => {
 
       const fullReport: ValidationReport = {
         ...report,
+        validatorType: user.validatorType,
         subjectFile: activeSubjectFile || undefined,
         rawInputData: inputValue,
         rawReferenceData: finalReferenceContent || []
@@ -455,7 +571,8 @@ const App: React.FC = () => {
                     {[
                       { id: InputType.TEXT, label: 'Text' },
                       { id: InputType.IMAGE, label: 'Photo' },
-                      { id: InputType.PDF, label: 'PDF' }
+                      { id: InputType.PDF, label: 'PDF' },
+                      { id: InputType.AUDIO, label: 'Audio' }
                     ].map(btn => (
                       <button
                         key={btn.id}
@@ -533,6 +650,70 @@ const App: React.FC = () => {
                       </div>
                     )}
 
+                    {inputType === InputType.AUDIO && (
+                      <div className="space-y-6 flex-1 flex flex-col">
+                        <VoiceRecorder 
+                          onRecordingComplete={async (dataUrl, fileName) => {
+                            setInputValue([dataUrl]);
+                            setUploadedAnswerNames([fileName]);
+                            setTranscribedText(null);
+                            setIsTranscribing(true);
+                            try {
+                              const text = await transcribeAudio(dataUrl, outputLanguage);
+                              setTranscribedText(text);
+                            } catch (err) {
+                              console.error("Transcription failed:", err);
+                            } finally {
+                              setIsTranscribing(false);
+                            }
+                          }} 
+                        />
+                        {inputValue.length > 0 && (
+                          <div className="p-5 bg-slate-50 border-2 border-slate-100 rounded-[2.5rem] flex-1 flex flex-col animate-in fade-in zoom-in duration-500">
+                            <div className="flex items-center justify-between mb-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-teal-100 text-teal-600 rounded-xl flex items-center justify-center">
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                                  </svg>
+                                </div>
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-black text-slate-800 uppercase tracking-widest">Recorded Audio</span>
+                                  <span className="text-[10px] text-slate-400 font-bold">{uploadedAnswerNames[0]}</span>
+                                </div>
+                              </div>
+                              <button onClick={() => {setInputValue([]); setUploadedAnswerNames([]); setTranscribedText(null);}} className="text-[10px] font-black text-red-400 uppercase tracking-wider hover:text-red-600">Delete</button>
+                            </div>
+                            <audio src={inputValue[0]} controls className="w-full h-10 rounded-lg mb-4" />
+                            
+                            {/* Transcribed Text Display */}
+                            <div className="mt-2 p-4 bg-white rounded-2xl border border-slate-100 shadow-sm">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Transcribed Text</span>
+                                {isTranscribing && (
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-teal-500 rounded-full animate-bounce"></div>
+                                    <span className="text-[10px] font-black text-teal-600 uppercase">Transcribing...</span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-sm text-slate-700 font-medium leading-relaxed italic">
+                                {isTranscribing ? (
+                                  <div className="space-y-2">
+                                    <div className="h-3 bg-slate-100 rounded-full w-full animate-pulse"></div>
+                                    <div className="h-3 bg-slate-100 rounded-full w-3/4 animate-pulse"></div>
+                                  </div>
+                                ) : transcribedText ? (
+                                  `"${transcribedText}"`
+                                ) : (
+                                  <span className="text-slate-300">Awaiting transcription...</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {inputType === InputType.IMAGE && (
                       <div className="space-y-6 flex-1 flex flex-col">
                         <button 
@@ -634,6 +815,10 @@ const App: React.FC = () => {
                 setCurrentReport(item.report);
                 setActiveTab('validate');
               }} 
+              onClearHistory={() => {
+                storageService.clearHistory();
+                setHistory([]);
+              }}
             />
           </div>
         )}
@@ -647,7 +832,7 @@ const App: React.FC = () => {
               <h3 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight">{user.name}</h3>
               <p className="text-emerald-600 font-bold mb-10 text-sm md:text-lg">{user.email}</p>
               
-              <div className="grid grid-cols-2 gap-4 md:gap-8">
+              <div className="grid grid-cols-2 gap-4 md:gap-8 mb-10">
                   <div className="bg-emerald-50 p-8 rounded-[2rem] md:rounded-[2.5rem] border-2 border-emerald-100 shadow-inner">
                     <span className="block text-4xl md:text-6xl font-black text-emerald-600 mb-2">{history.length}</span>
                     <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">Validations</span>
@@ -658,6 +843,33 @@ const App: React.FC = () => {
                     </span>
                     <span className="text-[10px] font-black text-teal-400 uppercase tracking-widest">Accuracy</span>
                   </div>
+              </div>
+
+              <div className="text-left space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Validator Configuration</label>
+                <div className="grid grid-cols-1 gap-4">
+                  {VALIDATOR_TYPES.map((type) => (
+                    <button
+                      key={type.id}
+                      onClick={() => {
+                        const updatedUser = { ...user, validatorType: type.id as ValidatorType };
+                        setUser(updatedUser);
+                        storageService.setUser(updatedUser);
+                      }}
+                      className={`p-6 rounded-[2rem] border-2 text-left transition-all relative overflow-hidden group ${user.validatorType === type.id ? 'border-emerald-500 bg-emerald-50/50' : 'border-slate-100 hover:border-emerald-200 bg-white'}`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={`font-black text-sm md:text-base ${user.validatorType === type.id ? 'text-emerald-700' : 'text-slate-700'}`}>{type.name}</span>
+                        {user.validatorType === type.id && (
+                          <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center">
+                            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+                          </div>
+                        )}
+                      </div>
+                      <p className={`text-[10px] md:text-xs font-medium leading-relaxed ${user.validatorType === type.id ? 'text-emerald-600/70' : 'text-slate-400'}`}>{type.description}</p>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>

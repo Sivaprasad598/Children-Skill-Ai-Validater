@@ -2,6 +2,7 @@
   "name": "BrainGauge AI",
   "description": "An advanced AI-powered multi-language validation platform for academic answers, essays, and code with detailed grammar, calligraphy, and subject analysis.",
   "requestFramePermissions": [
-    "camera"
+    "camera",
+    "microphone"
   ]
 }

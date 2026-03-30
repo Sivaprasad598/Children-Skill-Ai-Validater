@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { InputType, ReferenceType, ValidationReport, Mistake, IncorrectStatement } from "../types";
+import { InputType, ReferenceType, ValidationReport, Mistake, IncorrectStatement, ValidatorType } from "../types";
 
 let aiInstance: GoogleGenAI | null = null;
 
@@ -26,7 +26,7 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } {
   if (parts.length < 2) return { mimeType: 'text/plain', data: dataUrl };
   
   const mimeMatch = parts[0].match(/data:(.*?);base64/);
-  const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const mimeType = mimeMatch ? mimeMatch[1] : (dataUrl.includes('audio') ? 'audio/webm' : 'image/jpeg');
   let data = parts[1];
   
   if (mimeType === 'text/plain') {
@@ -41,40 +41,78 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } {
 }
 
 /**
- * Generates audio from text using Gemini TTS
+ * Generates audio from text using Gemini TTS with retry logic
  */
-async function generateAudio(text: string): Promise<string | undefined> {
+async function generateAudio(text: string, retries = 2): Promise<string | undefined> {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const ai = getAI();
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              // 'Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'
+              prebuiltVoiceConfig: { voiceName: 'Kore' },
+            },
+          },
+        },
+      });
+
+      return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    } catch (error: any) {
+      console.error(`TTS Attempt ${i + 1} failed:`, error);
+      if (i === retries) {
+        console.error("All TTS attempts failed.");
+        return undefined;
+      }
+      // Wait before retrying (exponential backoff)
+      await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Transcribes audio data to text using Gemini
+ */
+export async function transcribeAudio(audioDataUrl: string, language: string): Promise<string> {
+  const { mimeType, data } = parseDataUrl(audioDataUrl);
+  
   try {
     const ai = getAI();
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Kore' },
-          },
-        },
+      model: 'gemini-3-flash-preview',
+      contents: {
+        parts: [
+          { text: `Transcribe the following audio precisely in ${language}. Ensure proper punctuation and capitalization. Return ONLY the transcription text.` },
+          { inlineData: { mimeType, data } }
+        ]
       },
+      config: {
+        temperature: 0,
+      }
     });
 
-    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    return response.text || "Transcription failed.";
   } catch (error) {
-    console.error("TTS Error:", error);
-    return undefined;
+    console.error("Transcription Error:", error);
+    throw error;
   }
 }
 
 export async function generateAnalysis(params: {
   inputType: InputType;
   referenceType: ReferenceType;
+  validatorType: ValidatorType;
   language: string;
   answerContent: string[];
   referenceContent?: string[];
   subject?: string;
 }): Promise<ValidationReport> {
-  const { inputType, referenceType, language, answerContent, referenceContent, subject } = params;
+  const { inputType, referenceType, validatorType, language, answerContent, referenceContent, subject } = params;
 
   if (subject && subject !== 'None') {
     console.log(`[Gemini] Validating against subject: ${subject}`);
@@ -100,14 +138,39 @@ export async function generateAnalysis(params: {
     `;
   }
 
+  let validationLogic = "";
+  if (validatorType === ValidatorType.EXACT_MATCH) {
+    validationLogic = `
+    VALIDATION MODE: EXACT MATCH VALIDATION
+    - Compare the submitted data DIRECTLY with the reference resource.
+    - The match accuracy should be identical to the source content.
+    - It MUST match the words, phrasing, and specific terminology EXACTLY.
+    - Penalize heavily for any word changes, even if the meaning is similar.
+    - Focus on word-for-word accuracy.
+    `;
+  } else {
+    validationLogic = `
+    VALIDATION MODE: CONCEPTUAL VALIDATION
+    - Evaluate the overall concept and understanding rather than exact text matching.
+    - The validation varies based on how the user understood and answered.
+    - Compare the submitted answer with the reference resource CONCEPTUALLY.
+    - Focus on the correctness of the idea and subject understanding.
+    - Allow users to explain the concept in their own words.
+    - Consider the core idea, accuracy of explanation, and how well it reflects understanding (like academic exams).
+    - Do not penalize for different wording if the concept is correct.
+    `;
+  }
+
   const systemInstruction = `
     You are a Professional Academic Validator. Your goal is to evaluate a student's submission based on four core pillars: Subject Context, Structure, Grammar/Spelling, and Calligraphy (if applicable).
 
     ${subjectContext}
 
+    ${validationLogic}
+
     VALIDATION PILLARS & SCORING RULES:
 
-    1. SUBJECT CONTEXT VALIDATION (50% of total score) - CORE SCORING
+    1. SUBJECT CONTEXT VALIDATION (80% of total score) - CORE SCORING
        - MANDATORY: This score MUST be based ONLY on the semantic content of the student's answer.
        - MODALITY AGNOSTIC: The score for Subject Context must be IDENTICAL for the same content, regardless of whether it was submitted as an Image, PDF, or Text.
        - DO NOT penalize Subject Context score for handwriting quality, smudges, or image clarity. Those are handled ONLY in Pillar 4.
@@ -115,48 +178,47 @@ export async function generateAnalysis(params: {
        - Rule 1: Context Matching
          * Extract key concepts from the provided Subject PDF/Reference Material.
          * Extract key concepts from the student's answer.
-         * Calculate semantic similarity (do not just look for exact words).
-         * Accept paraphrased answers that convey the same meaning.
+         * Calculate similarity based on the selected VALIDATION MODE.
        - Rule 2: Concept Coverage & Missing Content (CRITICAL)
          * Identify specific sections, facts, or concepts present in the PDF that are missing from the student's answer.
          * List these missing parts clearly in the 'subjectMistakes' field.
          * IMPORTANT: Mention the missing parts EXACTLY as they appear in the Reference PDF (using the PDF's original language), rather than translating them into ${language}.
          * Scoring for this pillar:
-           - 100% key points covered: 50/50
-           - 80-99% key points covered: 40-49/50
-           - 60-79% key points covered: 30-39/50
-           - 40-59% key points covered: 20-29/50
-           - <40% key points covered: 0-19/50
+           - 100% key points covered: 80/80
+           - 80-99% key points covered: 64-79/80
+           - 60-79% key points covered: 48-63/80
+           - 40-59% key points covered: 32-47/80
+           - <40% key points covered: 0-31/80
          * Penalize off-topic writing.
        - Rule 3: Fact Accuracy
          * Check for incorrect statements or contradictions with the subject material.
          * Penalize wrong scientific facts or historical dates.
          * Deduct marks for each wrong concept detected.
 
-    2. STRUCTURE VALIDATION (20% of total score)
+    2. STRUCTURE VALIDATION (10% of total score)
        - Evaluate organization and flow.
        - Check for: Introduction, Logical flow, Paragraph separation, Bullet points (if appropriate).
        - Scoring:
-         * Clear intro + body + conclusion: High (16-20/20)
-         * Some structure but missing elements: Medium (10-15/20)
-         * Random writing/No structure: Low (0-9/20)
+         * Clear intro + body + conclusion: High (8-10/10)
+         * Some structure but missing elements: Medium (5-7/10)
+         * Random writing/No structure: Low (0-4/10)
 
-    3. GRAMMAR & SPELLING VALIDATION (15% of total score)
+    3. GRAMMAR & SPELLING VALIDATION (5% of total score)
        - Grammar Checks: Sentence formation, Subject-verb agreement, Tense consistency, Punctuation.
        - Spelling Checks (STRICT):
-         * 0 mistakes: 100% (15/15)
-         * 1-2 mistakes: 70% (10/15)
-         * 3-5 mistakes: 40% (6/15)
-         * >5 mistakes: 0% (0/15)
+         * 0 mistakes: 100% (5/5)
+         * 1-2 mistakes: 70% (3.5/5)
+         * 3-5 mistakes: 40% (2/5)
+         * >5 mistakes: 0% (0/5)
        - Deduct marks proportionally for grammar errors. If there are ANY spelling or grammar mistakes, the score MUST be less than 100.
 
-    4. CALLIGRAPHY / HANDWRITING VALIDATION (15% of total score)
+    4. CALLIGRAPHY / HANDWRITING VALIDATION (5% of total score)
        - ONLY applicable if the input is an IMAGE of a handwritten answer.
        - Evaluate: Readability score, Line alignment, Letter spacing, Overlapping characters, Smudges.
        - Scoring:
-         * Very clear: Full (15/15)
-         * Slightly messy: Medium (8-14/15)
-         * Hard to read: Low (0-7/15)
+         * Very clear: Full (5/5)
+         * Slightly messy: Medium (3-4/5)
+         * Hard to read: Low (0-2/5)
        - If OCR confidence is low or text is illegible, penalize heavily.
        - IMPORTANT: This is the ONLY pillar where visual presentation is judged. Visual quality MUST NOT affect Pillars 1, 2, or 3.
        - IF THE INPUT IS TEXT OR PDF (NOT AN IMAGE), SET THIS SCORE TO 100.
@@ -204,6 +266,9 @@ export async function generateAnalysis(params: {
   // Handle Submission
   if (answerContent && answerContent.length > 0) {
     parts.push({ text: `STUDENT SUBMISSION TYPE: ${inputType}` });
+    if (inputType === InputType.AUDIO) {
+      parts.push({ text: "The student has submitted a VOICE/AUDIO recording. You MUST first transcribe the audio and then evaluate the content based on the pillars. The Subject Context score should be based on the transcribed content. Ensure the transcription is properly formatted with punctuation and capitalization." });
+    }
     parts.push({ text: "STUDENT SUBMISSION TO VALIDATE:" });
     for (const content of answerContent) {
       const { mimeType, data } = parseDataUrl(content);
@@ -229,7 +294,7 @@ export async function generateAnalysis(params: {
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            overallAccuracy: { type: Type.NUMBER, description: "Weighted average score (0-100). Weighting: Subject Context(50%), Structure(20%), Grammar(15%), Calligraphy(15%)." },
+            overallAccuracy: { type: Type.NUMBER, description: "Weighted average score (0-100). Weighting: Subject Context(80%), Structure(10%), Grammar(5%), Calligraphy(5%)." },
             subjectContextScore: { type: Type.NUMBER, description: "Score for subject accuracy and coverage (0-100). This must be modality-agnostic." },
             structureScore: { type: Type.NUMBER, description: "Score for organization and flow (0-100)" },
             grammarScore: { type: Type.NUMBER, description: "Score for grammar and spelling (0-100)" },
@@ -304,13 +369,13 @@ export async function generateAnalysis(params: {
       reportData.grammarScore = Math.max(0, Math.min(reportData.grammarScore, enforcedGrammarScore));
       
       // Re-calculate overall accuracy based on weights
-      // Weighting: Subject Context(50%), Structure(20%), Grammar(15%), Calligraphy(15%)
+      // Weighting: Subject Context(80%), Structure(10%), Grammar(5%), Calligraphy(5%)
       const sScore = reportData.subjectContextScore || 0;
       const stScore = reportData.structureScore || 0;
       const gScore = reportData.grammarScore || 0;
       const cScore = reportData.calligraphyScore || 100;
       
-      reportData.overallAccuracy = (sScore * 0.5) + (stScore * 0.2) + (gScore * 0.15) + (cScore * 0.15);
+      reportData.overallAccuracy = (sScore * 0.8) + (stScore * 0.1) + (gScore * 0.05) + (cScore * 0.05);
     }
 
     // Generate audio summary of corrections
@@ -344,6 +409,7 @@ export async function generateAnalysis(params: {
       timestamp: new Date().toISOString(),
       inputType,
       referenceType,
+      validatorType,
       language,
       subject,
       audioData,
