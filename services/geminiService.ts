@@ -1,18 +1,13 @@
 
-import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { GoogleGenAI, Type, Modality, ThinkingLevel } from "@google/genai";
 import { InputType, ReferenceType, ValidationReport, Mistake, IncorrectStatement, ValidatorType } from "../types";
 
-let aiInstance: GoogleGenAI | null = null;
-
 function getAI() {
-  if (!aiInstance) {
-    const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is required");
-    }
-    aiInstance = new GoogleGenAI({ apiKey });
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY environment variable is required");
   }
-  return aiInstance;
+  return new GoogleGenAI({ apiKey });
 }
 
 /**
@@ -41,9 +36,60 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } {
 }
 
 /**
+ * Helper to convert raw PCM data to a WAV data URL.
+ * Gemini TTS returns raw PCM at 24000Hz, 16-bit, mono.
+ */
+function pcmToWav(base64Pcm: string): string {
+  const pcmData = atob(base64Pcm);
+  const buffer = new ArrayBuffer(44 + pcmData.length);
+  const view = new DataView(buffer);
+
+  // RIFF identifier
+  view.setUint32(0, 0x52494646, false); // "RIFF"
+  // file length
+  view.setUint32(4, 36 + pcmData.length, true);
+  // RIFF type
+  view.setUint32(8, 0x57415645, false); // "WAVE"
+  // format chunk identifier
+  view.setUint32(12, 0x666d7420, false); // "fmt "
+  // format chunk length
+  view.setUint32(16, 16, true);
+  // sample format (raw)
+  view.setUint16(20, 1, true);
+  // channel count
+  view.setUint16(22, 1, true);
+  // sample rate
+  view.setUint32(24, 24000, true);
+  // byte rate (sample rate * block align)
+  view.setUint32(28, 24000 * 2, true);
+  // block align (channel count * bytes per sample)
+  view.setUint16(32, 2, true);
+  // bits per sample
+  view.setUint16(34, 16, true);
+  // data chunk identifier
+  view.setUint32(36, 0x64617461, false); // "data"
+  // data chunk length
+  view.setUint32(40, pcmData.length, true);
+
+  // write PCM samples
+  for (let i = 0; i < pcmData.length; i++) {
+    view.setUint8(44 + i, pcmData.charCodeAt(i));
+  }
+
+  // Convert buffer to base64
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const base64 = btoa(binary);
+  return `data:audio/wav;base64,${base64}`;
+}
+
+/**
  * Generates audio from text using Gemini TTS with retry logic
  */
-async function generateAudio(text: string, retries = 2): Promise<string | undefined> {
+export async function generateAudio(text: string, systemInstruction?: string, voiceName: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' = 'Kore', retries = 2): Promise<string | undefined> {
   for (let i = 0; i <= retries; i++) {
     try {
       const ai = getAI();
@@ -51,17 +97,20 @@ async function generateAudio(text: string, retries = 2): Promise<string | undefi
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
         config: {
+          systemInstruction,
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
-              // 'Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'
-              prebuiltVoiceConfig: { voiceName: 'Kore' },
+              prebuiltVoiceConfig: { voiceName },
             },
           },
         },
       });
 
-      return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      const base64Pcm = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!base64Pcm) return undefined;
+
+      return pcmToWav(base64Pcm);
     } catch (error: any) {
       console.error(`TTS Attempt ${i + 1} failed:`, error);
       if (i === retries) {
@@ -76,31 +125,108 @@ async function generateAudio(text: string, retries = 2): Promise<string | undefi
 }
 
 /**
- * Transcribes audio data to text using Gemini
+ * Generates a relevant academic question based on the subject and reference material.
  */
-export async function transcribeAudio(audioDataUrl: string, language: string): Promise<string> {
+export async function generateQuestion(params: {
+  subject: string;
+  referenceContent?: string[];
+  language: string;
+  previousQuestion?: string;
+}): Promise<{ question: string; audioData?: string }> {
+  const { subject, referenceContent, language, previousQuestion } = params;
+  
+  const parts: any[] = [];
+  if (referenceContent && referenceContent.length > 0) {
+    parts.push({ text: "### REFERENCE MATERIAL ###" });
+    for (const content of referenceContent) {
+      const { mimeType, data } = parseDataUrl(content);
+      if (mimeType === 'text/plain') {
+        parts.push({ text: `[CONTENT]:\n${data}` });
+      } else {
+        parts.push({ inlineData: { mimeType, data } });
+      }
+    }
+  }
+
+  const prompt = `You are an Academic Examiner for the subject: ${subject}. 
+  STRICT RULE: You MUST generate ONE simple, clear, and direct question for a student to answer orally.
+  If reference material (PDF/Text) is provided, the question MUST be strictly based ONLY on that content and NOT from any external knowledge. 
+  Read the provided material carefully and frame a question that can be answered using only that material.
+  If no reference material is provided, use basic introductory knowledge of ${subject}.
+  ${previousQuestion ? `IMPORTANT: The previous question was "${previousQuestion}". You MUST generate a DIFFERENT question that covers a different concept or detail.` : ""}
+  The question must be in ${language}.
+  Return ONLY the question text.`;
+
+  parts.push({ text: prompt });
+
+  let attempts = 2;
+  for (let i = 0; i <= attempts; i++) {
+    try {
+      const ai = getAI();
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: { parts },
+        config: { 
+          temperature: 0.7,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
+      });
+
+      const question = response.text || `Tell me what you know about ${subject}.`;
+      
+      // Generate audio for the question
+      let audioData: string | undefined = undefined;
+      try {
+        audioData = await generateAudio(`Question for ${subject}: ${question}`);
+      } catch (err) {
+        console.error("Failed to generate question audio:", err);
+      }
+
+      return { question, audioData };
+    } catch (error) {
+      console.error(`Generate Question Attempt ${i + 1} failed:`, error);
+      if (i === attempts) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+    }
+  }
+  return { question: `Tell me what you know about ${subject}.` };
+}
+
+/**
+ * Transcribes audio data to text using Gemini with retry logic
+ */
+export async function transcribeAudio(audioDataUrl: string, language: string, retries = 2): Promise<string> {
   const { mimeType, data } = parseDataUrl(audioDataUrl);
   
-  try {
-    const ai = getAI();
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { text: `Transcribe the following audio precisely in ${language}. Ensure proper punctuation and capitalization. Return ONLY the transcription text.` },
-          { inlineData: { mimeType, data } }
-        ]
-      },
-      config: {
-        temperature: 0,
-      }
-    });
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const ai = getAI();
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: {
+          parts: [
+            { text: `Transcribe the following audio precisely in ${language}. Ensure proper punctuation and capitalization. Return ONLY the transcription text.` },
+            { inlineData: { mimeType, data } }
+          ]
+        },
+        config: {
+          temperature: 0,
+        }
+      });
 
-    return response.text || "Transcription failed.";
-  } catch (error) {
-    console.error("Transcription Error:", error);
-    throw error;
+      return response.text || "Transcription failed.";
+    } catch (error: any) {
+      console.error(`Transcription Attempt ${i + 1} failed:`, error);
+      if (i === retries) {
+        throw error;
+      }
+      // Wait before retrying (exponential backoff)
+      await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+    }
   }
+  return "Transcription failed.";
 }
 
 export async function generateAnalysis(params: {
@@ -111,8 +237,9 @@ export async function generateAnalysis(params: {
   answerContent: string[];
   referenceContent?: string[];
   subject?: string;
+  oralQuestions?: string[];
 }): Promise<ValidationReport> {
-  const { inputType, referenceType, validatorType, language, answerContent, referenceContent, subject } = params;
+  const { inputType, referenceType, validatorType, language, answerContent, referenceContent, subject, oralQuestions } = params;
 
   if (subject && subject !== 'None') {
     console.log(`[Gemini] Validating against subject: ${subject}`);
@@ -128,9 +255,20 @@ export async function generateAnalysis(params: {
 
   let subjectContext = "";
   if (subject && subject !== 'None') {
+    let oralContext = "";
+    if (oralQuestions && oralQuestions.length > 0) {
+      oralContext = "The student is answering the following specific questions in order:\n";
+      oralQuestions.forEach((q, i) => {
+        oralContext += `Question ${i + 1}: "${q}"\n`;
+        oralContext += `Student's Answer ${i + 1}: "${answerContent[i]}"\n\n`;
+      });
+      oralContext += "You MUST evaluate the accuracy of EACH answer relative to its corresponding question and the provided reference material.";
+    }
+
     subjectContext = `
     STRICT SUBJECT VALIDATION:
     The student is being tested on the subject: ${subject}.
+    ${oralContext}
     You MUST strictly adhere to the facts related to ${subject} provided in the Source of Truth.
     If the Source of Truth is a document provided for ${subject}, use it as your primary academic reference.
     Do not use external knowledge that contradicts or adds to the provided documents.
@@ -283,68 +421,81 @@ export async function generateAnalysis(params: {
   parts.push({ text: "Evaluate the submission based on the four pillars and return the JSON report. BE FAIR: If the content is correct, give full marks for Subject Context regardless of the submission format." });
 
   try {
-    const ai = getAI();
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: { parts },
-      config: {
-        systemInstruction,
-        temperature: 0,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            overallAccuracy: { type: Type.NUMBER, description: "Weighted average score (0-100). Weighting: Subject Context(80%), Structure(10%), Grammar(5%), Calligraphy(5%)." },
-            subjectContextScore: { type: Type.NUMBER, description: "Score for subject accuracy and coverage (0-100). This must be modality-agnostic." },
-            structureScore: { type: Type.NUMBER, description: "Score for organization and flow (0-100)" },
-            grammarScore: { type: Type.NUMBER, description: "Score for grammar and spelling (0-100)" },
-            calligraphyScore: { type: Type.NUMBER, description: "Score for handwriting readability (0-100). Use 100 if not an image." },
-            spellingMistakes: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  incorrect: { type: Type.STRING },
-                  correct: { type: Type.STRING }
+    let responseText = "";
+    let attempts = 3;
+    
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const ai = getAI();
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: { parts },
+          config: {
+            systemInstruction,
+            temperature: 0,
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                overallAccuracy: { type: Type.NUMBER, description: "Weighted average score (0-100). Weighting: Subject Context(80%), Structure(10%), Grammar(5%), Calligraphy(5%)." },
+                subjectContextScore: { type: Type.NUMBER, description: "Score for subject accuracy and coverage (0-100). This must be modality-agnostic." },
+                structureScore: { type: Type.NUMBER, description: "Score for organization and flow (0-100)" },
+                grammarScore: { type: Type.NUMBER, description: "Score for grammar and spelling (0-100)" },
+                calligraphyScore: { type: Type.NUMBER, description: "Score for handwriting readability (0-100). Use 100 if not an image." },
+                spellingMistakes: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      incorrect: { type: Type.STRING },
+                      correct: { type: Type.STRING }
+                    },
+                    required: ["incorrect", "correct"]
+                  }
                 },
-                required: ["incorrect", "correct"]
-              }
-            },
-            grammarMistakes: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  incorrect: { type: Type.STRING },
-                  correct: { type: Type.STRING },
-                  explanation: { type: Type.STRING }
+                grammarMistakes: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      incorrect: { type: Type.STRING },
+                      correct: { type: Type.STRING },
+                      explanation: { type: Type.STRING }
+                    },
+                    required: ["incorrect", "correct"]
+                  }
                 },
-                required: ["incorrect", "correct"]
-              }
-            },
-            incorrectStatements: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  statement: { type: Type.STRING },
-                  correction: { type: Type.STRING },
-                  reason: { type: Type.STRING }
+                incorrectStatements: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      statement: { type: Type.STRING },
+                      correction: { type: Type.STRING },
+                      reason: { type: Type.STRING }
+                    },
+                    required: ["statement", "correction", "reason"]
+                  }
                 },
-                required: ["statement", "correction", "reason"]
-              }
-            },
-            subjectMistakes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of specific missing key concepts, facts, or sections from the reference PDF, and any irrelevant content found." },
-            insights: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific feedback on structure and handwriting." },
-            extractedText: { type: Type.STRING },
-            referenceText: { type: Type.STRING }
-          },
-          required: ["overallAccuracy", "subjectContextScore", "structureScore", "grammarScore", "calligraphyScore", "spellingMistakes", "grammarMistakes", "subjectMistakes", "incorrectStatements", "insights", "extractedText"]
-        }
+                subjectMistakes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of specific missing key concepts, facts, or sections from the reference PDF, and any irrelevant content found." },
+                insights: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific feedback on structure and handwriting." },
+                extractedText: { type: Type.STRING },
+                referenceText: { type: Type.STRING }
+              },
+              required: ["overallAccuracy", "subjectContextScore", "structureScore", "grammarScore", "calligraphyScore", "spellingMistakes", "grammarMistakes", "subjectMistakes", "incorrectStatements", "insights", "extractedText"]
+            }
+          }
+        });
+        responseText = response.text;
+        break;
+      } catch (err) {
+        console.error(`Analysis Attempt ${i + 1} failed:`, err);
+        if (i === attempts - 1) throw err;
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
       }
-    });
+    }
 
-    const reportData = JSON.parse(response.text);
+    const reportData = JSON.parse(responseText);
     
     // Manual enforcement of strict scoring rules
     const numSpelling = reportData.spellingMistakes?.length || 0;

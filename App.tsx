@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User, InputType, ReferenceType, ValidationReport, ValidationHistoryItem, ValidatorType } from './types';
 import { LANGUAGES, SUBJECTS, VALIDATOR_TYPES } from './constants';
 import { storageService } from './services/storageService';
-import { generateAnalysis, transcribeAudio } from './services/geminiService';
+import { generateAnalysis, transcribeAudio, generateQuestion } from './services/geminiService';
 import Header from './components/Header';
 import Auth from './components/Auth';
 import ValidationReportView from './components/ValidationReport';
@@ -145,7 +145,10 @@ export const PdfPagePreview: React.FC<{ dataUrl: string; pageNumber: number; onD
 };
 
 // Specialized Audio Recorder component
-const VoiceRecorder: React.FC<{ onRecordingComplete: (dataUrl: string, fileName: string) => void }> = ({ onRecordingComplete }) => {
+const VoiceRecorder: React.FC<{ 
+  onRecordingComplete: (dataUrl: string, fileName: string) => void,
+  disabled?: boolean 
+}> = ({ onRecordingComplete, disabled }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +157,7 @@ const VoiceRecorder: React.FC<{ onRecordingComplete: (dataUrl: string, fileName:
   const chunksRef = useRef<Blob[]>([]);
 
   const startRecording = async () => {
+    if (disabled) return;
     setError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -213,11 +217,17 @@ const VoiceRecorder: React.FC<{ onRecordingComplete: (dataUrl: string, fileName:
   };
 
   return (
-    <div className="flex flex-col items-center justify-center gap-6 p-10 bg-slate-50 border-2 border-slate-100 border-dashed rounded-[2rem] hover:bg-teal-50 hover:border-teal-200 transition-all shadow-sm">
-      <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-500 ${isRecording ? 'bg-red-500 animate-pulse scale-110 shadow-lg shadow-red-200' : 'bg-teal-500 shadow-lg shadow-teal-100'}`}>
+    <div className={`flex flex-col items-center justify-center gap-6 p-10 border-2 border-dashed rounded-[2rem] transition-all shadow-sm ${
+      disabled ? 'bg-slate-100 border-slate-200 cursor-not-allowed opacity-60' : 'bg-slate-50 border-slate-100 hover:bg-teal-50 hover:border-teal-200'
+    }`}>
+      <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-500 ${
+        isRecording ? 'bg-red-500 animate-pulse scale-110 shadow-lg shadow-red-200' : 
+        disabled ? 'bg-slate-300' : 'bg-teal-500 shadow-lg shadow-teal-100'
+      }`}>
         <button 
           onClick={isRecording ? stopRecording : startRecording}
-          className="w-full h-full flex items-center justify-center text-white"
+          disabled={disabled}
+          className={`w-full h-full flex items-center justify-center text-white ${disabled ? 'cursor-not-allowed' : ''}`}
         >
           {isRecording ? (
             <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
@@ -239,7 +249,7 @@ const VoiceRecorder: React.FC<{ onRecordingComplete: (dataUrl: string, fileName:
           </div>
         )}
         <p className={`text-lg font-black tracking-widest uppercase ${isRecording ? 'text-red-600' : 'text-slate-800'}`}>
-          {isRecording ? 'Recording...' : 'Voice Submission'}
+          {isRecording ? 'Recording...' : disabled ? 'AI is asking...' : 'Voice Submission'}
         </p>
         <p className="text-2xl font-mono font-black text-slate-600 mt-1">
           {formatTime(recordingTime)}
@@ -266,6 +276,16 @@ const App: React.FC = () => {
   const [uploadedAnswerNames, setUploadedAnswerNames] = useState<string[]>([]);
   const [transcribedText, setTranscribedText] = useState<string | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  
+  // Oral Test State (3 Questions)
+  const [oralQuestions, setOralQuestions] = useState<string[]>([]);
+  const [oralAnswers, setOralAnswers] = useState<string[]>([]);
+  const [currentOralStep, setCurrentOralStep] = useState(0); // 0, 1, 2
+  const [isOralTestActive, setIsOralTestActive] = useState(false);
+  const [oralQuestionAudio, setOralQuestionAudio] = useState<string | null>(null);
+  const [isGeneratingQuestion, setIsGeneratingQuestion] = useState(false);
+  const oralAudioRef = useRef<HTMLAudioElement | null>(null);
   
   // Reference State
   const [referenceType, setReferenceType] = useState<ReferenceType>(ReferenceType.AI_TUTOR);
@@ -289,6 +309,11 @@ const App: React.FC = () => {
     // Clear previous subject content immediately to avoid stale previews
     setSubjectPreviewContent(null);
     setSubjectPreviewFile(null);
+    setOralQuestions([]);
+    setOralAnswers([]);
+    setCurrentOralStep(0);
+    setIsOralTestActive(false);
+    setOralQuestionAudio(null);
     setRefPdfPage(1);
 
     if (selectedSubject !== 'None') {
@@ -387,6 +412,87 @@ const App: React.FC = () => {
     }
   };
 
+  const handleStartOralTest = async (isNext = false) => {
+    if (selectedSubject === 'None') return;
+    
+    // Stop any currently playing oral audio
+    if (oralAudioRef.current) {
+      oralAudioRef.current.pause();
+      oralAudioRef.current = null;
+    }
+
+    if (!isNext) {
+      // Starting a fresh 3-question test
+      setOralQuestions([]);
+      setOralAnswers([]);
+      setCurrentOralStep(0);
+      setIsOralTestActive(true);
+      setInputValue([]);
+      setUploadedAnswerNames([]);
+      setTranscribedText(null);
+      setTranscriptionError(null);
+    } else {
+      setInputValue([]);
+      setUploadedAnswerNames([]);
+      setTranscribedText(null);
+      setTranscriptionError(null);
+    }
+
+    setIsGeneratingQuestion(true);
+    setOralQuestionAudio(null);
+    
+    try {
+      let finalReferenceContent = referenceValue.length > 0 ? [...referenceValue] : [];
+      
+      // If AI Tutor is selected but a subject is chosen, use the preview content
+      if (selectedSubject !== 'None' && subjectPreviewContent) {
+        let content = subjectPreviewContent;
+        
+        // If it's a path, fetch the content and convert to data URL for Gemini
+        if (subjectPreviewContent.startsWith('/subjects/')) {
+          try {
+            const resp = await fetch(subjectPreviewContent);
+            const blob = await resp.blob();
+            content = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          } catch (err) {
+            console.error("Failed to fetch subject content for oral test:", err);
+          }
+        }
+        
+        finalReferenceContent.push(content);
+      }
+
+      const { question, audioData } = await generateQuestion({
+        subject: selectedSubject,
+        referenceContent: finalReferenceContent.length > 0 ? finalReferenceContent : undefined,
+        language: outputLanguage,
+        previousQuestion: oralQuestions[oralQuestions.length - 1] || undefined
+      });
+      
+      setOralQuestions(prev => [...prev, question]);
+      setCurrentOralStep(prev => prev + 1);
+
+      if (audioData) {
+        setOralQuestionAudio(audioData);
+        const audio = new Audio(audioData);
+        oralAudioRef.current = audio;
+        audio.onended = () => {
+          oralAudioRef.current = null;
+        };
+        audio.play();
+      }
+    } catch (error) {
+      console.error("Oral Test Error:", error);
+    } finally {
+      setIsGeneratingQuestion(false);
+    }
+  };
+
   const handleValidate = async () => {
     if (inputValue.length === 0 || !user) return;
     setIsProcessing(true);
@@ -424,16 +530,19 @@ const App: React.FC = () => {
         referenceType: finalReferenceType,
         validatorType: user.validatorType,
         language: outputLanguage,
-        answerContent: inputValue,
+        answerContent: inputType === InputType.AUDIO ? oralAnswers : inputValue,
         referenceContent: finalReferenceContent,
-        subject: selectedSubject
+        subject: selectedSubject,
+        oralQuestions: inputType === InputType.AUDIO ? oralQuestions : undefined
       });
 
       const fullReport: ValidationReport = {
         ...report,
         validatorType: user.validatorType,
         subjectFile: activeSubjectFile || undefined,
-        rawInputData: inputValue,
+        oralQuestions: inputType === InputType.AUDIO ? oralQuestions : undefined,
+        oralQuestion: inputType === InputType.AUDIO ? oralQuestions.join(' | ') : undefined,
+        rawInputData: inputType === InputType.AUDIO ? oralAnswers : inputValue,
         rawReferenceData: finalReferenceContent || []
       };
 
@@ -652,17 +761,120 @@ const App: React.FC = () => {
 
                     {inputType === InputType.AUDIO && (
                       <div className="space-y-6 flex-1 flex flex-col">
+                        {/* Oral Test Question Generator */}
+                        {selectedSubject !== 'None' && (
+                          <div className="p-6 bg-emerald-50 border-2 border-emerald-100 rounded-[2.5rem] animate-in fade-in slide-in-from-top-4 duration-700">
+                            <div className="flex items-center justify-between mb-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center">
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                </div>
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-black text-emerald-800 uppercase tracking-widest">Oral Test Mode</span>
+                                  <span className="text-[10px] text-emerald-600/70 font-bold uppercase tracking-wider">
+                                    {selectedSubject} • {oralQuestions.length > 0 ? `Question ${currentOralStep} of 3` : 'Ready'}
+                                  </span>
+                                </div>
+                              </div>
+                              {!isOralTestActive ? (
+                                <button 
+                                  onClick={() => handleStartOralTest(false)}
+                                  disabled={isGeneratingQuestion}
+                                  className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all"
+                                >
+                                  Start Oral Test
+                                </button>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  {currentOralStep < 3 && oralAnswers.length === currentOralStep && (
+                                    <button 
+                                      onClick={() => handleStartOralTest(true)}
+                                      disabled={isGeneratingQuestion}
+                                      className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-teal-600 text-white hover:bg-teal-700 shadow-lg shadow-teal-200 transition-all"
+                                    >
+                                      {isGeneratingQuestion ? 'Generating...' : 'Next Question'}
+                                    </button>
+                                  )}
+                                  <button 
+                                    onClick={() => {
+                                      if (oralAudioRef.current) {
+                                        oralAudioRef.current.pause();
+                                        oralAudioRef.current = null;
+                                      }
+                                      setOralQuestions([]);
+                                      setOralAnswers([]);
+                                      setCurrentOralStep(0);
+                                      setIsOralTestActive(false);
+                                    }}
+                                    className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-slate-200 text-slate-600 hover:bg-slate-300 transition-all"
+                                  >
+                                    Exit
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            {oralQuestions.length > 0 && (
+                              <div className="space-y-4 animate-in fade-in zoom-in duration-500">
+                                {oralQuestions.map((q, idx) => (
+                                  <div key={idx} className="space-y-2">
+                                    <div className="p-4 bg-white rounded-2xl border border-emerald-100 shadow-sm">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Question {idx + 1}</span>
+                                        {idx === oralQuestions.length - 1 && oralQuestionAudio && (
+                                          <button 
+                                            onClick={() => {
+                                              if (oralAudioRef.current) oralAudioRef.current.pause();
+                                              const audio = new Audio(oralQuestionAudio);
+                                              oralAudioRef.current = audio;
+                                              audio.play();
+                                            }}
+                                            className="text-[10px] font-black text-emerald-600 uppercase flex items-center gap-1"
+                                          >
+                                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                                            Play
+                                          </button>
+                                        )}
+                                      </div>
+                                      <p className="text-sm text-slate-800 font-bold italic leading-relaxed">"{q}"</p>
+                                    </div>
+                                    {oralAnswers[idx] && (
+                                      <div className="ml-6 p-3 bg-teal-50 rounded-xl border border-teal-100">
+                                        <span className="text-[10px] font-black text-teal-600 uppercase tracking-widest block mb-1">Your Answer</span>
+                                        <p className="text-xs text-slate-600 font-medium italic leading-relaxed">"{oralAnswers[idx]}"</p>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                                
+                                {isGeneratingQuestion && (
+                                  <div className="p-4 bg-white/50 rounded-2xl border border-dashed border-emerald-200 animate-pulse">
+                                    <div className="h-4 bg-emerald-100 rounded-full w-3/4 mb-2"></div>
+                                    <div className="h-4 bg-emerald-100 rounded-full w-1/2"></div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         <VoiceRecorder 
+                          disabled={isGeneratingQuestion || !isOralTestActive || oralAnswers.length === 3 || oralAnswers.length === currentOralStep}
                           onRecordingComplete={async (dataUrl, fileName) => {
                             setInputValue([dataUrl]);
                             setUploadedAnswerNames([fileName]);
                             setTranscribedText(null);
+                            setTranscriptionError(null);
                             setIsTranscribing(true);
                             try {
                               const text = await transcribeAudio(dataUrl, outputLanguage);
                               setTranscribedText(text);
-                            } catch (err) {
+                              setOralAnswers(prev => [...prev, text]);
+                            } catch (err: any) {
                               console.error("Transcription failed:", err);
+                              setTranscriptionError(err.message || "Transcription failed. Please try again.");
                             } finally {
                               setIsTranscribing(false);
                             }
@@ -694,6 +906,12 @@ const App: React.FC = () => {
                                   <div className="flex items-center gap-2">
                                     <div className="w-2 h-2 bg-teal-500 rounded-full animate-bounce"></div>
                                     <span className="text-[10px] font-black text-teal-600 uppercase">Transcribing...</span>
+                                  </div>
+                                )}
+                                {transcriptionError && (
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                                    <span className="text-[10px] font-black text-red-600 uppercase">Error: {transcriptionError}</span>
                                   </div>
                                 )}
                               </div>
@@ -778,11 +996,10 @@ const App: React.FC = () => {
                
                <button
                   onClick={handleValidate}
-                    disabled={
-                      isProcessing || 
-                      inputValue.length === 0 || 
-                      (inputType === InputType.TEXT && !inputValue[0]?.trim())
-                    }
+                  disabled={
+                    isProcessing || 
+                    (inputType === InputType.AUDIO ? oralAnswers.length < 3 : (inputValue.length === 0 || (inputType === InputType.TEXT && !inputValue[0]?.trim())))
+                  }
                   className="w-full md:w-auto md:min-w-[280px] h-14 md:h-20 bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-black text-base md:text-xl rounded-2xl md:rounded-3xl shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3"
                 >
                   {isProcessing ? (

@@ -3,7 +3,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { ValidationReport, InputType, ReferenceType } from '../types';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { PdfPagePreview } from '../App';
-import { GoogleGenAI, Modality } from "@google/genai";
+import { generateAudio } from '../services/geminiService';
 
 interface ReportProps {
   report: ValidationReport;
@@ -18,6 +18,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
   const [isPaused, setIsPaused] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const htmlAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Audio utility functions
   const parseDataUrl = (dataUrl: string) => {
@@ -89,6 +90,10 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
           audioSourceRef.current.stop();
           audioSourceRef.current = null;
         }
+        if (htmlAudioRef.current) {
+          htmlAudioRef.current.pause();
+          htmlAudioRef.current = null;
+        }
         setIsSpeaking(null);
         setIsPaused(false);
       }
@@ -98,44 +103,18 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
     setIsPaused(false);
 
     try {
-      const apiKey = process.env.API_KEY;
-      if (!apiKey) {
-        throw new Error("API_KEY is required for speech synthesis");
-      }
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: text }] }],
-        config: {
-          systemInstruction: "You are a mature, warm, and professional Indian academic tutor. Speak with a calm, grounded, and authoritative yet encouraging tone. Avoid high-pitched or overly energetic American-style inflections. Focus on clarity and warmth.",
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Charon' },
-            },
-          },
-        },
-      });
+      const systemInstruction = "You are a mature, warm, and professional Indian academic tutor. Speak with a calm, grounded, and authoritative yet encouraging tone. Avoid high-pitched or overly energetic American-style inflections. Focus on clarity and warmth.";
+      const audioData = await generateAudio(text, systemInstruction, 'Charon');
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (base64Audio) {
-        if (!audioContextRef.current) {
-          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        }
-        const ctx = audioContextRef.current;
-        if (ctx.state === 'suspended') await ctx.resume();
-        
-        const audioBuffer = await decodeAudioData(decodeBase64(base64Audio), ctx, 24000, 1);
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(ctx.destination);
-        source.onended = () => {
+      if (audioData) {
+        const audio = new Audio(audioData);
+        htmlAudioRef.current = audio;
+        audio.onended = () => {
           setIsSpeaking(null);
           setIsPaused(false);
-          audioSourceRef.current = null;
+          htmlAudioRef.current = null;
         };
-        audioSourceRef.current = source;
-        source.start();
+        audio.play();
       } else {
         setIsSpeaking(null);
       }
@@ -146,6 +125,18 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
   };
 
   const togglePause = async () => {
+    if (isSpeaking && htmlAudioRef.current) {
+      const audio = htmlAudioRef.current;
+      if (audio.paused) {
+        await audio.play();
+        setIsPaused(false);
+      } else {
+        audio.pause();
+        setIsPaused(true);
+      }
+      return;
+    }
+
     if (!audioContextRef.current || !isSpeaking) return;
     const ctx = audioContextRef.current;
     
@@ -172,6 +163,19 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
     setIsPaused(false);
 
     try {
+      // If it's a WAV data URL (starts with data:audio/wav), use standard Audio
+      if (report.audioData.startsWith('data:audio/wav')) {
+        const audio = new Audio(report.audioData);
+        htmlAudioRef.current = audio;
+        audio.onended = () => {
+          setIsSpeaking(null);
+          setIsPaused(false);
+          htmlAudioRef.current = null;
+        };
+        audio.play();
+        return;
+      }
+
       if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       }
@@ -446,6 +450,36 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                     <p className="text-xs md:text-sm font-bold text-slate-800 truncate">{report.inputType}</p>
                   </div>
                 </div>
+                {report.oralQuestions && report.oralQuestions.length > 0 ? (
+                  <div className="space-y-3">
+                    <p className="text-[8px] font-black text-teal-600 uppercase tracking-widest mb-1">Oral Test Questions & Answers</p>
+                    {report.oralQuestions.map((q, idx) => (
+                      <div key={idx} className="p-3 bg-white rounded-xl border border-teal-100 shadow-sm space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="w-5 h-5 bg-teal-500 text-white rounded-full flex items-center justify-center text-[10px] font-black flex-shrink-0">{idx + 1}</span>
+                          <p className="text-[10px] md:text-xs font-bold text-slate-700 italic leading-relaxed">
+                            "{q}"
+                          </p>
+                        </div>
+                        {report.rawInputData && report.rawInputData[idx] && (
+                          <div className="pl-7 border-l-2 border-teal-50">
+                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Your Answer</p>
+                            <p className="text-[10px] md:text-xs font-medium text-slate-600 leading-relaxed italic">
+                              "{report.rawInputData[idx]}"
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : report.oralQuestion && (
+                  <div className="p-3 bg-white rounded-xl border border-teal-100 shadow-sm">
+                    <p className="text-[8px] font-black text-teal-600 uppercase tracking-widest mb-1">Oral Test Question</p>
+                    <p className="text-[10px] md:text-xs font-bold text-slate-700 italic leading-relaxed">
+                      "{report.oralQuestion}"
+                    </p>
+                  </div>
+                )}
                 {report.rawInputData && report.rawInputData.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {report.rawInputData.map((data, idx) => (
@@ -601,6 +635,10 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
                       if (audioSourceRef.current) {
                         audioSourceRef.current.stop();
                         audioSourceRef.current = null;
+                      }
+                      if (htmlAudioRef.current) {
+                        htmlAudioRef.current.pause();
+                        htmlAudioRef.current = null;
                       }
                       setIsSpeaking(null);
                       setIsPaused(false);

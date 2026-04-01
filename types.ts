@@ -79,8 +79,10 @@ export interface ValidationReport {
   audioTranscript?: string; // Text transcript of the audio summary
   subject?: string;
   subjectFile?: string;
-  rawInputData?: string[]; // Array of Base64 or Text
-  rawReferenceData?: string[]; // Array of Base64 or Text
+  oralQuestion?: string;
+  oralQuestions?: string[];
+  rawInputData?: string[];
+  rawReferenceData?: string[];
 }
 
 export interface ValidationHistoryItem {
