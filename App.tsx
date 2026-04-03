@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { User, InputType, ReferenceType, ValidationReport, ValidationHistoryItem, ValidatorType } from './types';
 import { LANGUAGES, SUBJECTS, VALIDATOR_TYPES } from './constants';
 import { storageService } from './services/storageService';
@@ -412,7 +412,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleStartOralTest = async (isNext = false) => {
+  const handleStartOralTest = useCallback(async (isNext = false) => {
     if (selectedSubject === 'None') return;
     
     // Stop any currently playing oral audio
@@ -491,7 +491,14 @@ const App: React.FC = () => {
     } finally {
       setIsGeneratingQuestion(false);
     }
-  };
+  }, [selectedSubject, subjectPreviewContent, referenceValue, outputLanguage, oralQuestions]);
+
+  // Auto-progress oral test to next question
+  useEffect(() => {
+    if (isOralTestActive && oralAnswers.length > 0 && oralAnswers.length < 3 && oralAnswers.length === currentOralStep && !isTranscribing && !isGeneratingQuestion) {
+      handleStartOralTest(true);
+    }
+  }, [oralAnswers.length, isOralTestActive, currentOralStep, isTranscribing, isGeneratingQuestion, handleStartOralTest]);
 
   const handleValidate = async () => {
     if (inputValue.length === 0 || !user) return;
@@ -998,6 +1005,8 @@ const App: React.FC = () => {
                   onClick={handleValidate}
                   disabled={
                     isProcessing || 
+                    isTranscribing ||
+                    isGeneratingQuestion ||
                     (inputType === InputType.AUDIO ? oralAnswers.length < 3 : (inputValue.length === 0 || (inputType === InputType.TEXT && !inputValue[0]?.trim())))
                   }
                   className="w-full md:w-auto md:min-w-[280px] h-14 md:h-20 bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-black text-base md:text-xl rounded-2xl md:rounded-3xl shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3"

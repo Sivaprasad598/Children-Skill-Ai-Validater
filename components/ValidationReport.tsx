@@ -103,7 +103,7 @@ const ValidationReportView: React.FC<ReportProps> = ({ report, onClose }) => {
     setIsPaused(false);
 
     try {
-      const systemInstruction = "You are a mature, warm, and professional Indian academic tutor. Speak with a calm, grounded, and authoritative yet encouraging tone. Avoid high-pitched or overly energetic American-style inflections. Focus on clarity and warmth.";
+      const systemInstruction = "Speak as a professional Indian academic tutor with a calm and clear tone.";
       const audioData = await generateAudio(text, systemInstruction, 'Charon');
 
       if (audioData) {

@@ -90,14 +90,34 @@ function pcmToWav(base64Pcm: string): string {
  * Generates audio from text using Gemini TTS with retry logic
  */
 export async function generateAudio(text: string, systemInstruction?: string, voiceName: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' = 'Kore', retries = 2): Promise<string | undefined> {
+  if (!text || text.trim().length === 0) {
+    console.warn("TTS: Empty text provided, skipping audio generation.");
+    return undefined;
+  }
+
+  // Aggressive cleaning: keep only alphanumeric, spaces, and basic punctuation
+  // This helps avoid 500 errors from unsupported characters in preview models
+  const sanitizedText = text.trim()
+    .replace(/[^\w\s.,!?;:()'"-]/g, ' ') 
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (sanitizedText.length === 0) {
+    console.warn("TTS: Text became empty after sanitization.");
+    return undefined;
+  }
+
   for (let i = 0; i <= retries; i++) {
     try {
       const ai = getAI();
+      const fullText = systemInstruction 
+        ? `${systemInstruction} Text to speak: ${sanitizedText}`
+        : sanitizedText;
+
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text }] }],
+        contents: [{ parts: [{ text: fullText }] }],
         config: {
-          systemInstruction,
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
@@ -108,15 +128,20 @@ export async function generateAudio(text: string, systemInstruction?: string, vo
       });
 
       const base64Pcm = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (!base64Pcm) return undefined;
+      if (!base64Pcm) {
+        console.warn(`TTS Attempt ${i + 1}: No audio data returned.`);
+        continue;
+      }
 
       return pcmToWav(base64Pcm);
     } catch (error: any) {
       console.error(`TTS Attempt ${i + 1} failed:`, error);
+      
       if (i === retries) {
         console.error("All TTS attempts failed.");
         return undefined;
       }
+      
       // Wait before retrying (exponential backoff)
       await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
     }
@@ -177,7 +202,9 @@ export async function generateQuestion(params: {
       // Generate audio for the question
       let audioData: string | undefined = undefined;
       try {
-        audioData = await generateAudio(`Question for ${subject}: ${question}`);
+        // Clean text for TTS
+        const cleanQuestion = question.replace(/\s+/g, ' ').trim();
+        audioData = await generateAudio(`Question for ${subject}: ${cleanQuestion}`);
       } catch (err) {
         console.error("Failed to generate question audio:", err);
       }
@@ -203,7 +230,9 @@ export async function transcribeAudio(audioDataUrl: string, language: string, re
   for (let i = 0; i <= retries; i++) {
     try {
       const ai = getAI();
-      const response = await ai.models.generateContent({
+      
+      // Add a timeout to the API call to prevent hanging
+      const transcriptionPromise = ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: {
           parts: [
@@ -213,8 +242,15 @@ export async function transcribeAudio(audioDataUrl: string, language: string, re
         },
         config: {
           temperature: 0,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         }
       });
+
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Transcription timed out after 30 seconds")), 30000)
+      );
+
+      const response = await Promise.race([transcriptionPromise, timeoutPromise]) as any;
 
       return response.text || "Transcription failed.";
     } catch (error: any) {
@@ -543,7 +579,13 @@ export async function generateAnalysis(params: {
 
     try {
       if (correctionsText.length > 50) {
-        audioData = await generateAudio(`Please read these corrections in ${language}: ${correctionsText}`);
+        // Truncate to avoid 500 errors with very long text - 600 chars is much safer
+        let truncatedText = correctionsText.length > 600 ? correctionsText.substring(0, 600) + "..." : correctionsText;
+        
+        // Clean text: remove multiple spaces, newlines, and any non-standard characters that might cause 500 errors
+        truncatedText = truncatedText.replace(/\s+/g, ' ').trim();
+        
+        audioData = await generateAudio(`Please read these corrections in ${language}: ${truncatedText}`);
       }
     } catch (audioErr) {
       console.error("Failed to generate audio summary:", audioErr);
